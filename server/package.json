@@ -1,0 +1,12 @@
+{
+  "name": "server",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "node --watch --no-warnings src/index.js",
+    "start": "node --no-warnings src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
