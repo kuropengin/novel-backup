@@ -5,3 +5,21 @@ client/dev-dist/
 .env
 *.log
 .claude/settings.local.json
+server/dist/
+
+# mobile (Capacitor / Android)
+mobile/dist/
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/capacitor-cordova-android-plugins/
+mobile/android/local.properties
+mobile/android/app/src/main/assets/public/
+mobile/android/app/src/main/assets/capacitor.config.json
+mobile/android/app/src/main/assets/capacitor.plugins.json
+mobile/android/app/src/main/res/xml/config.xml
+*.apk
+*.aab
+
+# Android Studio のプロジェクト設定(個人環境依存)
+mobile/android/.idea/

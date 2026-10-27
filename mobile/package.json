@@ -1,0 +1,28 @@
+{
+  "name": "mobile",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit -p tsconfig.json && vite build",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
+    "sync": "npm run build && cap sync android",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/app": "^7.1.2",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/preferences": "^7.0.0",
+    "cordova-plugin-inappbrowser": "^6.0.0",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "~5.9.3",
+    "vite": "^6.0.0",
+    "vitest": "^5.0.5",
+    "vue-tsc": "^3.3.13"
+  }
+}
