@@ -2,23 +2,20 @@ import { Router } from "express";
 import { z } from "zod";
 import type { Db } from "../db/index.js";
 import { nowIso } from "../db/index.js";
-import { enqueueNovelBackup } from "../backup/queue.js";
 import { ah, parseBody, sendError } from "../http/errors.js";
-import { sendSiteError } from "../http/siteErrors.js";
-import type { LiveService } from "../live/service.js";
-import { isSiteId, resolveUrl, SiteNotFoundError, type SiteId } from "../sites/index.js";
+import { isSiteId, novelUrl, resolveUrl, type SiteId } from "../sites.js";
 import { requireAuth } from "../auth/session.js";
 
 const KEY = /^[A-Za-z0-9_-]{1,64}$/;
 
-// title / author は任意。title 指定時はサイトへ取得せずその値で作品を作成する(モバイルアプリ用)
-const optionalMeta = {
-  title: z.string().trim().min(1).max(500).optional(),
+// title は必須(アプリが表示中のページから取得して渡す)。author は任意。サーバーはサイトへアクセスしない
+const meta = {
+  title: z.string().trim().min(1).max(500),
   author: z.string().trim().max(200).optional(),
 };
 const createSchema = z.union([
-  z.object({ site: z.string().refine(isSiteId, "unknown site"), novelKey: z.string().regex(KEY), ...optionalMeta }),
-  z.object({ url: z.string().min(1).max(2048), ...optionalMeta }),
+  z.object({ site: z.string().refine(isSiteId, "unknown site"), novelKey: z.string().regex(KEY), ...meta }),
+  z.object({ url: z.string().min(1).max(2048), ...meta }),
 ]);
 
 const patchSchema = z
@@ -28,6 +25,20 @@ const patchSchema = z
     lastReadEpisodeKey: z.string().regex(KEY).nullable().optional(),
   })
   .strict();
+
+const listQuerySchema = z.object({
+  q: z.string().trim().max(200).optional(),
+  sort: z.enum(["added", "updated", "title", "site"]).default("added"),
+  order: z.enum(["asc", "desc"]).default("desc"),
+});
+
+/** LIKE のワイルドカードをエスケープ(SQL 側は ESCAPE '!')。 */
+export function escapeLike(s: string): string {
+  return s.replace(/[!%_]/g, (c) => "!" + c);
+}
+
+/** サイトの日本語表示名でも検索できるようにする。 */
+const SITE_LABEL_SQL = `(CASE n.site WHEN 'narou' THEN 'なろう 小説家になろう' WHEN 'kakuyomu' THEN 'カクヨム' WHEN 'hameln' THEN 'ハーメルン' ELSE '' END)`;
 
 interface BookmarkRow {
   id: number;
@@ -40,23 +51,11 @@ interface BookmarkRow {
   title: string;
   author: string;
   url: string;
-  site_status: string;
-  is_deleted_on_site: number;
-  last_checked_at: string | null;
-  last_changed_at: string | null;
-  last_error: string | null;
-  episode_count: number;
-  unread_count: number;
 }
 
 const SELECT = `
   SELECT b.id, b.novel_id, b.note, b.last_read_episode_key, b.created_at,
-         n.site, n.novel_key, n.title, n.author, n.url, n.site_status, n.is_deleted_on_site,
-         n.last_checked_at, n.last_changed_at, n.last_error,
-         (SELECT COUNT(*) FROM episodes e WHERE e.novel_id = n.id AND e.removed_at IS NULL) AS episode_count,
-         (SELECT COUNT(*) FROM episodes e WHERE e.novel_id = n.id AND e.removed_at IS NULL
-            AND e.position > COALESCE((SELECT e2.position FROM episodes e2
-                                       WHERE e2.novel_id = n.id AND e2.episode_key = b.last_read_episode_key), -1)) AS unread_count
+         n.site, n.novel_key, n.title, n.author, n.url
   FROM bookmarks b JOIN novels n ON n.id = b.novel_id`;
 
 export function toBookmarkDto(r: BookmarkRow) {
@@ -68,18 +67,9 @@ export function toBookmarkDto(r: BookmarkRow) {
     title: r.title,
     author: r.author,
     url: r.url,
-    siteStatus: r.site_status,
-    isDeletedOnSite: r.is_deleted_on_site === 1,
     note: r.note,
     lastReadEpisodeKey: r.last_read_episode_key,
     createdAt: r.created_at,
-    lastBackupAt: r.last_checked_at,
-    lastChangedAt: r.last_changed_at,
-    lastError: r.last_error,
-    /** バックアップ済みの話数(未バックアップは 0) */
-    episodeCount: r.episode_count,
-    /** 最後に読んだ話より後ろの話数。未バックアップは 0 */
-    unreadCount: r.episode_count === 0 ? 0 : r.unread_count,
   };
 }
 
@@ -94,19 +84,18 @@ export function findBookmarkId(db: Db, userId: number, site: SiteId, novelKey: s
   return row?.id ?? null;
 }
 
-type NovelRef = { id: number; last_checked_at: string | null };
-
-export function bookmarksRouter(db: Db, live: LiveService): Router {
+export function bookmarksRouter(db: Db): Router {
   const router = Router();
   router.use(requireAuth);
 
   function getOne(userId: number, id: number): BookmarkRow | undefined {
     return db.prepare(`${SELECT} WHERE b.user_id = ? AND b.id = ?`).get(userId, id) as unknown as BookmarkRow | undefined;
   }
-  function findNovel(site: SiteId, novelKey: string): NovelRef | undefined {
-    return db.prepare("SELECT id, last_checked_at FROM novels WHERE site = ? AND novel_key = ?").get(site, novelKey) as unknown as
-      | NovelRef
+  function findNovelId(site: SiteId, novelKey: string): number | undefined {
+    const row = db.prepare("SELECT id FROM novels WHERE site = ? AND novel_key = ?").get(site, novelKey) as unknown as
+      | { id: number }
       | undefined;
+    return row?.id;
   }
 
   function fillEmptyMeta(userId: number, bookmarkId: number, title: string, author?: string) {
@@ -116,11 +105,36 @@ export function bookmarksRouter(db: Db, live: LiveService): Router {
     if (!b.author && author) db.prepare("UPDATE novels SET author = ? WHERE id = ?").run(author, b.novel_id);
   }
 
+  // q: タイトル/作者/サイト(id・日本語名)の部分一致。sort: added|updated|title|site(updated は当面 added と同じ)
   router.get("/", (req, res) => {
-    const rows = db
-      .prepare(`${SELECT} WHERE b.user_id = ? ORDER BY b.created_at DESC, b.id DESC`)
-      .all(req.user!.id) as unknown as BookmarkRow[];
+    const parsed = listQuerySchema.safeParse(req.query);
+    if (!parsed.success) return void res.status(400).json({ error: "validation_error", details: parsed.error.issues });
+    const { q, sort, order } = parsed.data;
+    const dir = order === "asc" ? "ASC" : "DESC";
+    const orderBy =
+      sort === "title"
+        ? `n.title COLLATE NOCASE ${dir}, b.id DESC`
+        : sort === "site"
+          ? `n.site ${dir}, b.created_at DESC, b.id DESC`
+          : `b.created_at ${dir}, b.id ${dir}`;
+    const params: (string | number)[] = [req.user!.id];
+    let where = "WHERE b.user_id = ?";
+    if (q) {
+      const like = `%${escapeLike(q)}%`;
+      where += ` AND (n.title LIKE ? ESCAPE '!' OR n.author LIKE ? ESCAPE '!' OR n.site LIKE ? ESCAPE '!' OR ${SITE_LABEL_SQL} LIKE ? ESCAPE '!')`;
+      params.push(like, like, like, like);
+    }
+    const rows = db.prepare(`${SELECT} ${where} ORDER BY ${orderBy}`).all(...params) as unknown as BookmarkRow[];
     res.json({ bookmarks: rows.map(toBookmarkDto) });
+  });
+
+  // ★ 状態用。作品/話ページでない URL は bookmarked:false
+  router.get("/lookup", (req, res) => {
+    const url = typeof req.query.url === "string" ? req.query.url : "";
+    if (!url) return sendError(res, 400, "validation_error", "url is required");
+    const r = resolveUrl(url);
+    const id = r ? findBookmarkId(db, req.user!.id, r.site, r.novelKey) : null;
+    res.json({ bookmarked: id !== null, bookmarkId: id });
   });
 
   router.post(
@@ -144,40 +158,20 @@ export function bookmarksRouter(db: Db, live: LiveService): Router {
       const existing = findBookmarkId(db, userId, site, novelKey);
       if (existing !== null) {
         // 既存作品のタイトル/著者が空の場合のみ補完
-        if (body.title) fillEmptyMeta(userId, existing, body.title, body.author);
+        fillEmptyMeta(userId, existing, body.title, body.author);
         return void res.status(200).json({ bookmark: toBookmarkDto(getOne(userId, existing)!), created: false });
       }
 
-      let novel = findNovel(site, novelKey);
-      const clientMeta = body.title !== undefined;
-      if (!novel && clientMeta) {
-        // 呼び出し側がタイトルを渡した場合はサイトへ取得しない(Cloudflare 等で取得できないサイト向け)
+      let novelId = findNovelId(site, novelKey);
+      if (novelId === undefined) {
         db.prepare(
           `INSERT OR IGNORE INTO novels (site, novel_key, title, author, url, site_status, created_at)
            VALUES (?, ?, ?, ?, ?, 'unknown', ?)`,
-        ).run(site, novelKey, body.title!, body.author ?? "", live.getAdapter(site).novelUrl(novelKey), nowIso());
-        novel = findNovel(site, novelKey)!;
-      } else if (!novel) {
-        // メタ情報を取得(キャッシュがあれば再利用)。サイトに存在しなければ 404、ブロック等は空メタで登録
-        let meta: { title: string; author: string; url: string; status: string } | null = null;
-        try {
-          const info = await live.getNovel(site, novelKey);
-          meta = { title: info.title, author: info.author, url: info.url, status: info.status };
-        } catch (e) {
-          if (e instanceof SiteNotFoundError) return sendSiteError(res, e);
-          console.warn("[bookmarks] metadata fetch failed:", e instanceof Error ? e.message : e);
-        }
-        const url = meta?.url ?? live.getAdapter(site).novelUrl(novelKey);
-        // 取得中に別リクエストが作った場合に備え OR IGNORE
-        db.prepare(
-          `INSERT OR IGNORE INTO novels (site, novel_key, title, author, url, site_status, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        ).run(site, novelKey, meta?.title ?? "", meta?.author ?? "", url, meta?.status ?? "unknown", nowIso());
-        novel = findNovel(site, novelKey)!;
+        ).run(site, novelKey, body.title, body.author ?? "", novelUrl(site, novelKey), nowIso());
+        novelId = findNovelId(site, novelKey)!;
       }
-      db.prepare("INSERT OR IGNORE INTO bookmarks (user_id, novel_id, created_at) VALUES (?, ?, ?)").run(userId, novel.id, nowIso());
+      db.prepare("INSERT OR IGNORE INTO bookmarks (user_id, novel_id, created_at) VALUES (?, ?, ?)").run(userId, novelId, nowIso());
       const id = findBookmarkId(db, userId, site, novelKey)!;
-      if (!clientMeta && !novel.last_checked_at) enqueueNovelBackup(novel.id, "bookmark");
       res.status(201).json({ bookmark: toBookmarkDto(getOne(userId, id)!), created: true });
     }),
   );

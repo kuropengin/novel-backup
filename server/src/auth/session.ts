@@ -4,9 +4,7 @@ import type { Db } from "../db/index.js";
 import { nowIso } from "../db/index.js";
 import { sendError } from "../http/errors.js";
 
-export const SESSION_COOKIE = "nb_sid";
-export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-/** モバイルアプリ用 Bearer トークンの有効期間 */
+/** アプリ用 Bearer トークンの有効期間(sessions テーブルに SHA-256 で保存) */
 export const TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
 export type Role = "admin" | "viewer";
@@ -19,10 +17,8 @@ export interface SessionUser {
 declare module "express-serve-static-core" {
   interface Request {
     user?: SessionUser;
-    /** 認証に使われたトークン(Cookie の sid または Bearer)。未認証なら undefined */
+    /** 認証に使われた Bearer トークン。未認証なら undefined */
     authToken?: string;
-    /** Bearer ヘッダで認証されたか */
-    authViaBearer?: boolean;
   }
 }
 
@@ -30,7 +26,7 @@ function sha256(s: string): string {
   return crypto.createHash("sha256").update(s).digest("hex");
 }
 
-export function createSession(db: Db, userId: number, ttlMs: number = SESSION_TTL_MS): { id: string; expiresAt: Date } {
+export function createSession(db: Db, userId: number, ttlMs: number = TOKEN_TTL_MS): { id: string; expiresAt: Date } {
   const id = crypto.randomBytes(32).toString("base64url");
   const now = Date.now();
   const expiresAt = new Date(now + ttlMs);
@@ -70,30 +66,15 @@ export function cleanupExpiredSessions(db: Db): void {
   db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(nowIso());
 }
 
-export function sessionCookieOptions(secure: boolean, expires?: Date) {
-  return { httpOnly: true, sameSite: "lax" as const, secure, path: "/", ...(expires ? { expires } : {}) };
-}
-
-/** Cookie または Authorization: Bearer からユーザーを解決して req.user を設定する middleware。 */
+/** Authorization: Bearer からユーザーを解決して req.user を設定する middleware。 */
 export function loadSession(db: Db) {
   return (req: Request, _res: Response, next: NextFunction) => {
-    const sid: unknown = req.cookies?.[SESSION_COOKIE];
-    if (typeof sid === "string" && sid) {
-      const user = resolveSession(db, sid);
+    const m = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? "");
+    if (m) {
+      const user = resolveSession(db, m[1]!);
       if (user) {
         req.user = user;
-        req.authToken = sid;
-      }
-    }
-    if (!req.user) {
-      const m = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? "");
-      if (m) {
-        const user = resolveSession(db, m[1]!);
-        if (user) {
-          req.user = user;
-          req.authToken = m[1];
-          req.authViaBearer = true;
-        }
+        req.authToken = m[1];
       }
     }
     next();

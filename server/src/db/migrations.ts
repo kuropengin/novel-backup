@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 /** user_version = 適用済み件数。末尾に追記していく(既存要素は変更しない)。 */
 export const migrations: string[] = [
-  // 1: 初期スキーマ (docs/03_data_model.md)
+  // 1: 初期スキーマ 
   `
 CREATE TABLE users (
   id            INTEGER PRIMARY KEY,
@@ -105,6 +105,31 @@ CREATE INDEX idx_episodes_novel ON episodes(novel_id, position);
 CREATE INDEX idx_ep_versions_episode ON episode_versions(episode_id, version);
 CREATE INDEX idx_bookmarks_user ON bookmarks(user_id);
 CREATE INDEX idx_sessions_expires ON sessions(expires_at);
+`,
+  // 2: アプリ専用化。バックアップ/設定関連テーブルを削除(users / sessions / novels / bookmarks は保持。
+  //    novels の未使用カラムはテーブル再構築を避けるためそのまま残す)
+  `
+DROP TABLE IF EXISTS episode_versions;
+DROP TABLE IF EXISTS episodes;
+DROP TABLE IF EXISTS novel_meta_versions;
+DROP TABLE IF EXISTS backup_runs;
+DROP TABLE IF EXISTS settings;
+`,
+  // 3: 閲覧履歴(ユーザー毎。作品ページは episode_key = '')
+  `
+CREATE TABLE history (
+  id            INTEGER PRIMARY KEY,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  site          TEXT NOT NULL CHECK (site IN ('hameln','narou','kakuyomu')),
+  novel_key     TEXT NOT NULL,
+  episode_key   TEXT NOT NULL DEFAULT '',
+  novel_title   TEXT NOT NULL DEFAULT '',
+  episode_title TEXT NOT NULL DEFAULT '',
+  url           TEXT NOT NULL,
+  viewed_at     TEXT NOT NULL,
+  UNIQUE (user_id, site, novel_key, episode_key)
+);
+CREATE INDEX idx_history_user_viewed ON history(user_id, viewed_at DESC);
 `,
 ];
 
