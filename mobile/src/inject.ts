@@ -1,20 +1,17 @@
 /**
- * InAppBrowser のページ内に注入するスクリプト。
- * 利用者が ★ を押したときだけ、表示中のページの DOM から作品タイトル等を読み取ってアプリへ通知する。
- * 自動取得は行わない。関数は文字列化して注入されるため、外部の変数・import を参照してはならない。
+ * SiteView.evaluate で表示中ページに対して実行する、ページ情報の取得コード。
+ * ★ の保存や閲覧履歴の送信のときに、表示中ページの DOM から作品名・話タイトル等を読み取るだけ(自動取得は行わない)。
+ * 関数は文字列化して実行されるため、外部の変数・import を参照してはならない。
  */
-export interface PagePayload {
-  type: "nb-save";
+export interface PageInfo {
   url: string;
-  title: string;
+  novelTitle: string;
+  /** 話ページのときのみ。作品ページ等では空 */
+  episodeTitle: string;
   author: string;
 }
 
-export function pageScript(): void {
-  const w = window as unknown as Record<string, unknown>;
-  if (w.__nbStar || document.getElementById("nb-star")) return; // 再注入しない
-  w.__nbStar = 1;
-
+export function extractPageInfo(): PageInfo {
   const host = location.hostname;
   const site = /(^|\.)syosetu\.org$/.test(host)
     ? "hameln"
@@ -23,11 +20,13 @@ export function pageScript(): void {
       : /(^|\.)kakuyomu\.jp$/.test(host)
         ? "kakuyomu"
         : "";
-  if (!site) return; // 3 サイト以外(広告・外部リンク等)では出さない
+  const out: PageInfo = { url: location.href, novelTitle: "", episodeTitle: "", author: "" };
+  if (!site) return out; // 3 サイト以外では何も読まない
 
-  const text = (sel: string, root?: ParentNode): string => {
-    const el = (root || document).querySelector(sel);
-    return el && el.textContent ? el.textContent.replace(/\s+/g, " ").trim() : "";
+  const clean = (s: string | null | undefined): string => (s || "").replace(/\s+/g, " ").trim();
+  const text = (sel: string): string => {
+    const el = document.querySelector(sel);
+    return el ? clean(el.textContent) : "";
   };
   const first = (sels: string[]): string => {
     for (let i = 0; i < sels.length; i++) {
@@ -36,105 +35,84 @@ export function pageScript(): void {
     }
     return "";
   };
-  const dt = (document.title || "").trim();
+  const dt = clean(document.title);
 
-  function titleNarou(): string {
+  function narou(): void {
     const m = /^\/(n\w+)\/(\d+)\/?$/.exec(location.pathname);
     if (m) {
-      // 話ページ: .p-novel__title は話タイトル。作品名はパンくずの作品リンク、無ければ document.title の前半
+      // 話ページ: .p-novel__title が話タイトル。作品名はパンくずの作品リンク、無ければ document.title の前半
+      const ep = first([".p-novel__title", "h1"]);
+      out.episodeTitle = ep;
       const links = document.querySelectorAll('a[href="/' + m[1] + '/"], a[href$="syosetu.com/' + m[1] + '/"]');
       for (let i = 0; i < links.length; i++) {
-        const t = (links[i]!.textContent || "").replace(/\s+/g, " ").trim();
-        if (t && t !== "目次") return t;
+        const t = clean(links[i]!.textContent);
+        if (t && t !== "目次") {
+          out.novelTitle = t;
+          break;
+        }
       }
-      const ep = first([".p-novel__title", "h1"]);
-      if (ep && dt.slice(-ep.length - 3) === " - " + ep) return dt.slice(0, dt.length - ep.length - 3);
-      return dt.split(" - ")[0] || dt;
+      if (!out.novelTitle) {
+        out.novelTitle = ep && dt.slice(-ep.length - 3) === " - " + ep ? dt.slice(0, dt.length - ep.length - 3) : dt.split(" - ")[0] || dt;
+      }
+    } else {
+      out.novelTitle = first([".p-novel__title", ".novel_title", "h1"]) || dt;
     }
-    return first([".p-novel__title", ".novel_title", "h1"]) || dt;
+    out.author = text(".p-novel__author a") || text(".p-novel__author").replace(/^作者[:：]\s*/, "");
   }
-  function titleKakuyomu(): string {
-    const t = first(["#contentMain-header-workTitle", 'h1 a[href^="/works/"]', "h1"]);
-    if (t) return t;
-    const parts = dt.replace(/\s*-\s*カクヨム.*$/, "").split(" - ");
-    return (parts[parts.length - 1] || dt).replace(/（[^（）]*）$/, "").trim();
+
+  function kakuyomu(): void {
+    if (/^\/works\/\d+\/episodes\/\d+/.test(location.pathname)) out.episodeTitle = first([".widget-episodeTitle", "h1"]);
+    let t = first(["#contentMain-header-workTitle", 'h1 a[href^="/works/"]']);
+    if (!t && !out.episodeTitle) t = first(["h1"]);
+    if (!t) {
+      const parts = dt.replace(/\s*-\s*カクヨム.*$/, "").split(" - ");
+      t = clean((parts[parts.length - 1] || dt).replace(/（[^（）]*）$/, ""));
+    }
+    out.novelTitle = t;
+    const m = /（([^（）]*)）\s*-\s*カクヨム/.exec(dt);
+    out.author = text('a[href^="/users/"]') || (m ? m[1]! : "");
   }
-  function titleHameln(): string {
-    // 実 DOM 未検証(推測セレクタ)。取れなければ document.title から " - ハーメルン" を除去した前半
-    const t = first(['span[itemprop="name"]', ".ss span[style*='font-size:120%']", "h1"]);
+
+  function hameln(): void {
+    // 実 DOM 未検証(推測セレクタ)。取れなければ document.title(「作品名 - 話名 - ハーメルン」想定)を分解
+    const base = dt.replace(/\s*[-－|]\s*ハーメルン.*$/, "");
+    const parts = base.split(" - ");
     const m = /^\/novel\/(\d+)\/\d+\.html$/.exec(location.pathname);
     if (m) {
-      // 話ページ(推測): 作品ページへのリンクのテキストを作品名とみなす
       const links = document.querySelectorAll('a[href="/novel/' + m[1] + '/"]');
       for (let i = 0; i < links.length; i++) {
-        const lt = (links[i]!.textContent || "").replace(/\s+/g, " ").trim();
-        if (lt && lt !== "目次") return lt;
+        const lt = clean(links[i]!.textContent);
+        if (lt && lt !== "目次") {
+          out.novelTitle = lt;
+          break;
+        }
       }
+      if (!out.novelTitle) out.novelTitle = first(['span[itemprop="name"]']) || parts[0] || base;
+      out.episodeTitle = first(["#honbun_title", ".ss span[style*='font-size']"]) || (parts.length > 1 ? parts[parts.length - 1]! : "");
+    } else {
+      out.novelTitle = first(['span[itemprop="name"]', ".ss span[style*='font-size:120%']", "h1"]) || parts[0] || base;
     }
-    if (t) return t;
-    const base = dt.replace(/\s*[-－|]\s*ハーメルン.*$/, "");
-    return base.split(" - ")[0] || base;
-  }
-  function authorOf(): string {
-    if (site === "narou") return text(".p-novel__author a") || text(".p-novel__author").replace(/^作者[:：]\s*/, "");
-    if (site === "hameln") return first(['span[itemprop="author"] a', 'span[itemprop="author"]']);
-    const m = /（([^（）]*)）\s*-\s*カクヨム/.exec(dt);
-    return text('a[href^="/users/"]') || (m ? m[1]! : "");
+    out.author = first(['span[itemprop="author"] a', 'span[itemprop="author"]']);
   }
 
-  const toast = (msg: string, kind?: string) => {
-    let t = document.getElementById("nb-toast");
-    if (!t) {
-      t = document.createElement("div");
-      t.id = "nb-toast";
-      t.style.cssText =
-        "position:fixed;left:50%;bottom:90px;transform:translateX(-50%);max-width:80%;padding:10px 16px;border-radius:8px;" +
-        "color:#fff;font:14px/1.4 sans-serif;z-index:2147483647;text-align:center;pointer-events:none;";
-      document.body.appendChild(t);
-    }
-    t.textContent = msg;
-    t.setAttribute("data-kind", kind === "error" ? "error" : "ok"); // テーマ CSS(starCss)が配色
-    t.style.background = kind === "error" ? "#b3261e" : "#2b6b47";
-    t.style.display = "block";
-    const timer = w.__nbToastTimer as number | undefined;
-    if (timer) clearTimeout(timer);
-    w.__nbToastTimer = setTimeout(() => {
-      t!.style.display = "none";
-    }, 3000);
-  };
-  w.__nbToast = toast;
-
-  const btn = document.createElement("div");
-  btn.id = "nb-star";
-  btn.textContent = "★";
-  btn.setAttribute("role", "button");
-  btn.style.cssText =
-    "position:fixed;right:16px;bottom:24px;width:48px;height:48px;border-radius:50%;background:#f5b301;color:#fff;" +
-    "font:26px/48px sans-serif;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.4);z-index:2147483647;opacity:.85;" +
-    "user-select:none;-webkit-user-select:none;cursor:pointer;";
-  btn.addEventListener("click", (ev) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-    try {
-      const title = (site === "narou" ? titleNarou() : site === "kakuyomu" ? titleKakuyomu() : titleHameln()) || dt || host;
-      const payload = { type: "nb-save", url: location.href, title: title.slice(0, 500), author: authorOf().slice(0, 200) };
-      const bridge = (w.webkit as { messageHandlers?: { cordova_iab?: { postMessage(s: string): void } } } | undefined)?.messageHandlers
-        ?.cordova_iab;
-      if (!bridge) throw new Error("no bridge");
-      bridge.postMessage(JSON.stringify(payload));
-    } catch {
-      toast("アプリへ送信できませんでした", "error");
-    }
-  });
-  document.body.appendChild(btn);
+  try {
+    if (site === "narou") narou();
+    else if (site === "kakuyomu") kakuyomu();
+    else hameln();
+  } catch (e) {
+    /* 取得失敗時は document.title で補う */
+  }
+  if (!out.novelTitle) out.novelTitle = dt || host;
+  out.novelTitle = out.novelTitle.slice(0, 500);
+  out.episodeTitle = out.episodeTitle.slice(0, 500);
+  out.author = out.author.slice(0, 200);
+  return out;
 }
 
-/** 注入用のコード文字列(即時実行)。 */
-export function pageScriptCode(): string {
-  return `(${pageScript.toString()})();`;
-}
-
-/** ページ内トーストを表示するコード。 */
-export function toastCode(message: string, kind: "ok" | "error"): string {
-  return `window.__nbToast&&window.__nbToast(${JSON.stringify(message)},${JSON.stringify(kind)});`;
+/**
+ * SiteView.evaluate に渡すコード。式の値は PageInfo のオブジェクト(result は JSON 文字列)。
+ * 例: `const info = await evaluateJson<PageInfo>(pageInfoCode())`
+ */
+export function pageInfoCode(): string {
+  return `(${extractPageInfo.toString()})()`;
 }

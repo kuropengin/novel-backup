@@ -1,5 +1,5 @@
 import { Preferences } from "@capacitor/preferences";
-import { DEFAULT_DISPLAY, sanitizeDisplay, type DisplaySettings } from "./settings";
+import { DEFAULT_DISPLAY, sanitizeDisplay, type DisplaySettings } from "./index";
 
 const KEY = "display";
 

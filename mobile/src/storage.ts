@@ -4,13 +4,20 @@ export interface Settings {
   serverUrl: string;
   token: string;
   username: string;
+  role: "" | "admin" | "viewer";
 }
 
-const KEYS = ["serverUrl", "token", "username"] as const;
+export const EMPTY_SETTINGS: Settings = { serverUrl: "", token: "", username: "", role: "" };
+
+const KEYS = ["serverUrl", "token", "username", "role"] as const;
 
 export async function loadSettings(): Promise<Settings> {
-  const out: Settings = { serverUrl: "", token: "", username: "" };
-  for (const k of KEYS) out[k] = (await Preferences.get({ key: k })).value ?? "";
+  const out: Settings = { ...EMPTY_SETTINGS };
+  for (const k of KEYS) {
+    const v = (await Preferences.get({ key: k })).value ?? "";
+    if (k === "role") out.role = v === "admin" || v === "viewer" ? v : "";
+    else out[k] = v;
+  }
   return out;
 }
 

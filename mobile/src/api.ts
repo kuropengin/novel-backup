@@ -20,12 +20,51 @@ export interface Bookmark {
   title: string;
   author: string;
   url: string;
+  note?: string;
+  createdAt: string;
+}
+
+export interface HistoryItem {
+  id: number;
+  site: string;
+  novelKey: string;
+  episodeKey: string;
+  novelTitle: string;
+  episodeTitle: string;
+  url: string;
+  viewedAt: string;
+  /** view=novel のときのみ: 閲覧した話数 */
+  episodeCount?: number;
+}
+
+export interface HistoryInput {
+  url: string;
+  novelTitle?: string;
+  episodeTitle?: string;
+  viewedAt?: string;
 }
 
 export interface SaveInput {
   url: string;
-  title?: string;
+  title: string;
   author?: string;
+}
+
+export type Role = "admin" | "viewer";
+export interface User {
+  id: number;
+  username: string;
+  role: Role;
+  createdAt: string;
+}
+export interface TokenResult {
+  token: string;
+  expiresAt: string;
+  user: { id: number; username: string; role: Role };
+}
+export interface AuthStatus {
+  setupRequired: boolean;
+  user: { id: number; username: string; role: Role } | null;
 }
 
 export interface ApiConfig {
@@ -65,9 +104,37 @@ async function call<T>(cfg: ApiConfig, method: string, path: string, body?: unkn
   return { status: res.status, data: data as T };
 }
 
-export async function login(serverUrl: string, username: string, password: string) {
-  const r = await call<{ token: string; user: { username: string } }>({ serverUrl, token: "" }, "POST", "/api/auth/token", { username, password }, false);
-  return r.data;
+export async function authStatus(serverUrl: string, token = ""): Promise<AuthStatus> {
+  return (await call<AuthStatus>({ serverUrl, token }, "GET", "/api/auth/status")).data;
+}
+
+export async function login(serverUrl: string, username: string, password: string): Promise<TokenResult> {
+  return (await call<TokenResult>({ serverUrl, token: "" }, "POST", "/api/auth/token", { username, password }, false)).data;
+}
+
+/** 初回のみ: 最初の管理者を作成し、そのままトークンを受け取る */
+export async function setupAdmin(serverUrl: string, username: string, password: string): Promise<TokenResult> {
+  return (await call<TokenResult>({ serverUrl, token: "" }, "POST", "/api/auth/setup", { username, password, token: true }, false)).data;
+}
+
+export async function changePassword(cfg: ApiConfig, currentPassword: string, newPassword: string): Promise<void> {
+  await call(cfg, "POST", "/api/auth/password", { currentPassword, newPassword });
+}
+
+export async function listUsers(cfg: ApiConfig): Promise<User[]> {
+  return (await call<{ users: User[] }>(cfg, "GET", "/api/users")).data.users;
+}
+
+export async function createUser(cfg: ApiConfig, input: { username: string; password: string; role: Role }): Promise<User> {
+  return (await call<{ user: User }>(cfg, "POST", "/api/users", input)).data.user;
+}
+
+export async function updateUser(cfg: ApiConfig, id: number, patch: { role?: Role; password?: string }): Promise<User> {
+  return (await call<{ user: User }>(cfg, "PATCH", `/api/users/${id}`, patch)).data.user;
+}
+
+export async function deleteUser(cfg: ApiConfig, id: number): Promise<void> {
+  await call(cfg, "DELETE", `/api/users/${id}`);
 }
 
 export async function logout(cfg: ApiConfig): Promise<void> {
@@ -76,6 +143,31 @@ export async function logout(cfg: ApiConfig): Promise<void> {
 
 export async function listBookmarks(cfg: ApiConfig): Promise<Bookmark[]> {
   return (await call<{ bookmarks: Bookmark[] }>(cfg, "GET", "/api/bookmarks")).data.bookmarks;
+}
+
+/** 表示中ページ(話ページでも可)の★状態 */
+export async function lookupBookmark(cfg: ApiConfig, url: string): Promise<{ bookmarked: boolean; bookmarkId: number | null }> {
+  return (await call<{ bookmarked: boolean; bookmarkId: number | null }>(cfg, "GET", `/api/bookmarks/lookup?url=${encodeURIComponent(url)}`)).data;
+}
+
+export async function postHistory(cfg: ApiConfig, input: HistoryInput): Promise<HistoryItem> {
+  return (await call<{ history: HistoryItem }>(cfg, "POST", "/api/history", input)).data.history;
+}
+
+export async function listHistory(cfg: ApiConfig, view: "episode" | "novel", q = "", limit = 200): Promise<HistoryItem[]> {
+  const qs = new URLSearchParams({ view, limit: String(limit) });
+  if (q.trim()) qs.set("q", q.trim());
+  return (await call<{ history: HistoryItem[] }>(cfg, "GET", `/api/history?${qs}`)).data.history;
+}
+
+export async function deleteHistory(cfg: ApiConfig, id: number): Promise<void> {
+  await call(cfg, "DELETE", `/api/history/${id}`);
+}
+
+/** 作品単位で閲覧履歴を削除 */
+export async function deleteHistoryNovel(cfg: ApiConfig, site: string, novelKey: string): Promise<void> {
+  const qs = new URLSearchParams({ site, novelKey });
+  await call(cfg, "DELETE", `/api/history?${qs}`);
 }
 
 export async function saveBookmark(cfg: ApiConfig, input: SaveInput): Promise<{ created: boolean; bookmark: Bookmark }> {
@@ -92,6 +184,13 @@ const MESSAGES: Record<string, string> = {
   too_many_requests: "試行回数が多すぎます。しばらく待ってから再試行してください",
   not_a_novel_page: "作品ページではありません",
   unauthorized: "ログインの有効期限が切れました。再ログインしてください",
+  forbidden: "この操作には管理者権限が必要です",
+  already_setup: "初期設定は完了済みです。ログインしてください",
+  username_taken: "そのユーザー名は既に使われています",
+  cannot_delete_self: "自分自身は削除できません",
+  last_admin: "最後の管理者は削除・降格できません",
+  not_found: "対象が見つかりません",
+  validation_error: "入力内容が正しくありません(ユーザー名は英数字・_・- の 3〜32 文字、パスワードは 8〜128 文字)",
 };
 
 export function errorMessage(e: unknown): string {

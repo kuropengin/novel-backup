@@ -13,8 +13,10 @@
     "@capacitor/android": "^7.0.0",
     "@capacitor/app": "^7.1.2",
     "@capacitor/core": "^7.0.0",
+    "@capacitor/dialog": "^7.0.4",
+    "@capacitor/network": "^7.0.4",
     "@capacitor/preferences": "^7.0.0",
-    "cordova-plugin-inappbrowser": "^6.0.0",
+    "@capacitor/status-bar": "^7.0.6",
     "vue": "^3.5.13"
   },
   "devDependencies": {
