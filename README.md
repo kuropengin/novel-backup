@@ -1,122 +1,52 @@
-# 小説バックアップ
+# 小説ビューア(novel-backup)
 
-ハーメルン / 小説家になろう / カクヨムの作品を **個人的に** 閲覧・バックアップするセルフホスト型 Web アプリです。
-ブラウザ(PWA 対応)から作品を回遊して読み、ブックマークした作品を定期的に取得して版ごとに保存します。
+ハーメルン / 小説家になろう / カクヨムを **Android アプリで元サイトのまま直接閲覧** し、気に入った作品を自分のサーバーに「お気に入り」として保存する個人用システムです。
 
-## 主な機能
+- **mobile/**: Android アプリ(Capacitor + Vue)。3 サイトを WebView で表示し、★ ボタンで保存。本文の文字サイズ・行間・フォント設定、初期設定、ユーザー管理(管理者)を備えます。
+- **server/**: お気に入りとユーザーを保存する API サーバー(Express + SQLite、Bearer トークン認証)。サイトへは一切アクセスしません。
 
-- **ログイン / ロール**: 管理者(`admin`)と閲覧者(`viewer`)。初回起動時に `/setup` で管理者を作成します。
-- **ライブ閲覧**
-  - ブラウズモード: 各サイトを内部 Proxy 経由で iframe 表示し、検索やランキングを含めて回遊できます。
-  - リーダーモード: サイトアダプタで本文を取り出し、アプリ独自の UI(文字サイズ・テーマ・縦書きなど)で読めます。
-- **ブックマーク**: アプリ内のブックマークです(サイト側のブックマークとは同期しません)。ユーザーごとに管理します。
-- **定期バックアップ**: ブックマークされた作品を設定間隔で取得します。話は本文が変わったときだけ新しい版を追加し、削除された話や作品もデータは消さずに残します。
-- **バックアップ閲覧**: 作品・話ごとに版を選んで表示し、2 版の差分を確認できます。
-- **PWA**: ホーム画面に追加して使えます。バックアップ閲覧はオフライン時に最後に見た内容を表示します。
-- **Android アプリ(`mobile/`)**: 3 サイトを Proxy なしで直接表示し、★ ボタンでサーバーのブックマークへ保存します。Bearer トークンで認証します。ビルド手順は [mobile/README.md](mobile/README.md)、仕様は [docs/08_mobile_app.md](docs/08_mobile_app.md) を参照してください。
+自動取得・チャレンジ突破・UA/指紋偽装は行いません。Web クライアント・Proxy・バックアップ機能は削除しました(完全版はコミット `2892245`)。
 
-設計の詳細は [docs/](docs/) を参照してください。概要は [docs/00_overview.md](docs/00_overview.md)、構成は [docs/01_architecture.md](docs/01_architecture.md) です。
+設計は [docs/](docs/) を参照してください([概要](docs/00_overview.md) / [サーバー API](docs/01_server_api.md) / [データモデル](docs/02_data_model.md) / [アプリ](docs/03_mobile_app.md))。
 
 ## 動作環境
 
-- Node.js **22.13 以上**(組み込みの `node:sqlite` を使用します)
-- npm(workspaces 対応のバージョン)
+- Node.js **22.13 以上**(組み込みの `node:sqlite` を使用)
+- APK のビルド: JDK 21 と Android SDK(Android Studio に同梱)
 
-## セットアップ
+## セットアップとサーバー起動
 
 ```bash
 npm install
+npm run build   # server(tsc)と mobile(vue-tsc + vite)をビルド
+npm start       # http://localhost:3000(PORT で変更)。全インターフェースで待ち受け
 ```
 
-依存関係はルートで一括インストールします(`server` / `client` は npm workspaces のメンバーです)。
+開発時は `npm run dev`(`tsx watch`)。DB は `data/novel-backup.db`(`DATA_DIR` で場所を変更可)。環境変数は `PORT` と `DATA_DIR` のみです。
 
-## 開発
+最初のユーザーはアプリの設定画面の **初期設定** で作成します(管理者)。以降は管理者がアプリの「ユーザー管理」から追加します。
+
+実機から接続するには、PC のファイアウォールで TCP 3000 の受信を LAN から許可してください。外部に公開する場合は HTTPS のリバースプロキシを置いてください(アプリは `usesCleartextTraffic` を有効にしています)。
+
+## アプリのビルドとインストール
 
 ```bash
-npm run dev
+npm run mobile:sync   # mobile をビルドして android/ へ同期
+npm run mobile:apk    # debug APK をビルド(JDK 21 / Android SDK を自動検出)
 ```
 
-- サーバー: `http://localhost:3000`(`tsx watch` で変更を監視します)
-- クライアント: Vite の開発サーバー(通常 `http://localhost:5173`)を開いてください。`/api` と `/proxy` はサーバー(:3000)へ転送されます。
-- 開発サーバーでは PWA の Service Worker は無効です。
+APK: `mobile/android/app/build/outputs/apk/debug/app-debug.apk`。詳細は [mobile/README.md](mobile/README.md)。
 
-## 本番運用
+サーバー URL: エミュレータは `http://10.0.2.2:3000`、実機は PC の LAN アドレス(例 `http://192.168.1.10:3000`)。
 
-```bash
-npm run build   # client(vue-tsc + vite)と server(tsc)をビルド
-npm start       # server/dist を起動。client/dist を同じポートで配信します
-```
+## スクリプト
 
-ブラウザで `http://localhost:3000` を開きます(ポートは `PORT` で変更できます)。
-
-### 初回セットアップ
-
-ユーザーが 1 人もいない状態でアクセスすると `/setup` に移動します。ここで管理者のユーザー名とパスワードを作成してください。
-
-- ユーザー名: 英数字・`_`・`-` の 3〜32 文字
-- パスワード: 8〜128 文字
-
-以降は管理者がアプリ内の「ユーザー管理」から閲覧者(`viewer`)を追加します。
-
-## 環境変数
-
-`server/src/config.ts` で読み込みます。すべて省略可能です。
-
-| 変数 | 既定値 | 説明 |
-|------|--------|------|
-| `PORT` | `3000` | サーバーの待ち受けポート |
-| `DATA_DIR` | `<リポジトリ>/data` | データ保存先(DB を置くディレクトリ) |
-| `ALLOWED_ORIGINS` | (空) | CSRF 検証で追加許可するオリジン(カンマ区切り。例 `https://novel.example.com`)。リバースプロキシが Host を書き換える環境で `bad_origin` になる場合に設定します |
-| `COOKIE_SECURE` | `false` | `true` にすると Cookie に `Secure` を付けます。HTTPS 運用時に設定します |
-| `USER_AGENT` | 一般的なブラウザ UA に `novel-backup/0.1 (personal use)` を付加した値 | 外部サイトへの取得時に送る UA |
-
-バックアップの間隔などはアプリ内の「バックアップ設定」(管理者のみ)で変更します。環境変数ではありません。
-
-## データの場所とバックアップ
-
-- DB ファイル: `DATA_DIR/novel-backup.db`(既定では `data/novel-backup.db`)
-- DB は SQLite の WAL モードで動作するため、同じフォルダに `novel-backup.db-wal` と `novel-backup.db-shm` が作られることがあります。
-- **安全にコピーするには、サーバーを停止してから** `data/` フォルダごとコピーしてください。
-- 稼働中にコピーする場合は、`-wal` ファイルも含めて同時にコピーする必要があります。途中でずれると不整合になるおそれがあるため、停止してからのコピーを推奨します。
-- `data/` は `.gitignore` に含まれています。
-
-## HTTPS とリバースプロキシ
-
-- 外部に公開する場合は、必ず HTTPS 化したリバースプロキシ(nginx、Caddy など)の背後で動かし、`COOKIE_SECURE=true` を設定してください。
-- サーバーは `trust proxy` を `loopback` に設定しています。リバースプロキシは同じマシン(`127.0.0.1` / `::1`)から接続させてください。
-- **PWA(Service Worker)は HTTPS でのみ動作します。** ただし `localhost` は例外として HTTP でも動作します。
-- 外部公開する場合でも、アプリはログイン必須です。ログインなしで見える画面はありません。
-
-## よく使うコマンド
-
-```bash
-npm run typecheck                      # server / client / mobile の型チェック
-npm test                               # server のテスト(vitest)
-npm run build                          # 本番ビルド(client / server / mobile)
-npm run mobile:sync                    # mobile をビルドして Android プロジェクトへ同期
-npm run mobile:apk                     # debug APK をビルド(JDK 21 + Android SDK が必要)
-
-# サイトへ実際にアクセスするスモークテスト(ネットワーク必須。既定ではスキップ)
-LIVE_TEST=1 npm test                   # Bash
-$env:LIVE_TEST="1"; npm test           # PowerShell
-
-# 作品 URL / 話 URL を指定して、アダプタが目次・本文を取れるか確認
-npx tsx server/scripts/try-adapter.ts <作品URL または 話URL>
-```
-
-## 既知の制限
-
-- **ハーメルン**: 現在、Cloudflare のボット対策によりサーバーからの取得がブロックされています。パーサーのセレクタは推定のままで、実ページでは未検証です。ブロック時は「ボット対策によりブロック」と表示されます。
-  - 回避策: 管理設定の「ハーメルン接続」に、自分のブラウザの Cookie(cf_clearance 等)と User-Agent を設定すると、ハーメルン宛(syosetu.org)のリクエストにのみ付与されます。cf_clearance は取得したブラウザの IP と UA に紐付き期限もあるため、サーバーを同じネットワークで動かし、ブロック表示が出たら取り直してください。Cookie は DB に平文保存され API では返しません。サイト規約の遵守は利用者の責任です。
-- **カクヨム**: 改稿日時を取得できないため、本文の改稿は次のどちらかの方法でしか検知されません。
-  - 設定の `fullRecheckEveryRuns`(N 回に 1 回、全話を再取得)
-  - 手動実行の「強制(force)」
-- **Proxy(ブラウズモード)**: スクリプトを除去して配信します。そのため、JavaScript で動的に描画される部分(一部の目次やボタンなど)は表示されない場合があります。
-- 対象は個人利用を想定しています。R18 系サブドメイン(ノクターン等)には対応していません。
-
-## 利用上の注意
-
-- **個人利用のみ**を前提としています。取得した本文や画像を再配布・公開しないでください。
-- サイトへの負荷に配慮してください。同一サイトへのリクエストは直列化され、既定で 1.5 秒以上の間隔を空けています(下限 1 秒)。この値を下げたり、並列化したりしないでください。
-- 外部に公開する場合も、必ずログインを必須にしてください。認証なしでの公開は行わないでください。
-- 各サイトの利用規約を確認し、遵守してください。
+| コマンド | 内容 |
+|---|---|
+| `npm run dev` | サーバーを watch 起動 |
+| `npm run build` | server + mobile(Web)をビルド |
+| `npm start` | ビルド済みサーバーを起動 |
+| `npm run typecheck` | server / mobile の型検査 |
+| `npm test` | server(vitest + supertest)/ mobile(vitest) |
+| `npm run mobile:sync` | mobile ビルド + `cap sync android` |
+| `npm run mobile:apk` | debug APK をビルド |
