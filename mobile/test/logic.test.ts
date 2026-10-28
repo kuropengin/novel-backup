@@ -3,7 +3,7 @@ import { ScrollHideController } from "../src/logic/scrollHide";
 import { enqueue, flushQueue, sanitizeQueue, type QueuedView } from "../src/logic/historyQueue";
 import { filterBookmarks, formatDate, initialOf, offlineOnly, relativeTime, sortBookmarks, type BookmarkLike } from "../src/logic/lists";
 import { addNotification, markAllRead, markRead, removeNotification, sanitizeNotifications, unreadCount, MAX_NOTIFICATIONS } from "../src/logic/notifications";
-import { classifyUrl } from "../src/logic/sites";
+import { classifyUrl, isAllowedHost, isInAppUrl, externalOpenTarget, truncateUrl } from "../src/logic/sites";
 
 describe("ScrollHideController", () => {
   it("しきい値(8px)未満では隠さない / 超えたら隠す", () => {
@@ -155,5 +155,36 @@ describe("classifyUrl", () => {
     expect(classifyUrl("https://yomou.syosetu.com/")).toBeNull();
     expect(classifyUrl("https://kakuyomu.jp/")).toBeNull();
     expect(classifyUrl("nope")).toBeNull();
+  });
+});
+
+describe("external link policy", () => {
+  it("allows only the three sites (and subdomains)", () => {
+    for (const h of ["syosetu.org", "www.syosetu.org", "ncode.syosetu.com", "novel18.syosetu.com", "kakuyomu.jp", "www.kakuyomu.jp"])
+      expect(isAllowedHost(h)).toBe(true);
+    for (const h of ["evil-syosetu.org", "syosetu.org.evil.com", "example.com", "kakuyomu.jp.evil.test", "", null, undefined])
+      expect(isAllowedHost(h as string)).toBe(false);
+  });
+  it("classifies URLs", () => {
+    expect(isInAppUrl("https://kakuyomu.jp/works/1")).toBe(true);
+    expect(isInAppUrl("about:blank")).toBe(true);
+    expect(isInAppUrl("https://example.com/")).toBe(false);
+    expect(isInAppUrl("mailto:a@b.c")).toBe(false);
+    expect(isInAppUrl("intent://x#Intent;end")).toBe(false);
+    expect(isInAppUrl("javascript:alert(1)")).toBe(false);
+    expect(isInAppUrl("not a url")).toBe(false);
+  });
+  it("picks the external open target", () => {
+    expect(externalOpenTarget("https://example.com/a")).toBe("https://example.com/a");
+    expect(externalOpenTarget("mailto:a@b.c")).toBe("mailto:a@b.c");
+    expect(externalOpenTarget("tel:123")).toBe("tel:123");
+    expect(externalOpenTarget("javascript:alert(1)")).toBeNull();
+    expect(externalOpenTarget("intent://x#Intent;scheme=foo;end")).toBeNull();
+    expect(externalOpenTarget("intent://x#Intent;scheme=foo;S.browser_fallback_url=https%3A%2F%2Fexample.com%2Fp;end")).toBe("https://example.com/p");
+    expect(externalOpenTarget("intent://x#Intent;S.browser_fallback_url=javascript%3Aalert(1);end")).toBeNull();
+  });
+  it("truncates long urls", () => {
+    expect(truncateUrl("https://a.b/", 100)).toBe("https://a.b/");
+    expect(truncateUrl("x".repeat(200), 100)).toHaveLength(100);
   });
 });

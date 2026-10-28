@@ -44,7 +44,11 @@ import java.util.Locale;
 @CapacitorPlugin(name = "SiteView")
 public class SiteViewPlugin extends Plugin {
 
-    /** アプリ内で開いてよいホスト(サブドメイン含む)。これ以外への遷移は外部ブラウザへ渡す。 */
+    /**
+     * アプリ内で開いてよいホスト(サブドメイン含む)。唯一の許可リスト。これ以外へは遷移せず、
+     * externalLink イベントで JS に通知する(確認後に openExternal で既定ブラウザへ)。
+     * 注意: TS 側 src/logic/sites.ts の ALLOWED_HOST_SUFFIXES / isAllowedHost / isInAppUrl と必ず一致させること。
+     */
     private static final String[] ALLOWED_HOST_SUFFIXES = {"syosetu.org", "syosetu.com", "kakuyomu.jp"};
     private static final long ANIM_MS = 200;
     /** SPA 遷移(pushState)で合成する pageFinished の遅延。タイトル更新を待つ。 */
@@ -180,6 +184,33 @@ public class SiteViewPlugin extends Plugin {
         });
     }
 
+    /** 既定ブラウザ等で URL を開く。http/https/mailto/tel のみ許可(intent: や javascript: は拒否)。 */
+    @PluginMethod
+    public void openExternal(PluginCall call) {
+        final String url = call.getString("url");
+        if (url == null) {
+            call.reject("url is required");
+            return;
+        }
+        Uri uri = Uri.parse(url);
+        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+        if (!("http".equals(scheme) || "https".equals(scheme) || "mailto".equals(scheme) || "tel".equals(scheme))) {
+            call.reject("scheme is not allowed");
+            return;
+        }
+        try {
+            Intent i = new Intent(Intent.ACTION_VIEW, uri);
+            i.addCategory(Intent.CATEGORY_BROWSABLE);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getActivity().startActivity(i);
+            call.resolve();
+        } catch (ActivityNotFoundException e) {
+            call.reject("このリンクを開けるアプリがありません");
+        } catch (Exception e) {
+            call.reject(String.valueOf(e.getMessage()), e);
+        }
+    }
+
     @PluginMethod
     public void getState(PluginCall call) {
         onUi(call, () -> call.resolve(state()));
@@ -296,14 +327,18 @@ public class SiteViewPlugin extends Plugin {
         return ("http".equals(scheme) || "https".equals(scheme)) && isAllowedHost(u.getHost());
     }
 
-    private void openExternally(Uri uri) {
-        try {
-            Intent i = new Intent(Intent.ACTION_VIEW, uri);
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            getActivity().startActivity(i);
-        } catch (ActivityNotFoundException ignored) {
-            // 開けるアプリが無ければ何もしない
-        }
+    /** 許可外 URL を JS に通知する(自動では何も開かない)。 */
+    private void emitExternal(String url) {
+        JSObject d = new JSObject();
+        d.put("url", url == null ? "" : url);
+        notifyListeners("externalLink", d);
+    }
+
+    /** 許可ホストの http(s)、または about/data/blob(ページ内部)なら true。TS の isInAppUrl と一致させる。 */
+    private static boolean isInAppUrl(Uri uri) {
+        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+        if ("http".equals(scheme) || "https".equals(scheme)) return isAllowedHost(uri.getHost());
+        return "about".equals(scheme) || "data".equals(scheme) || "blob".equals(scheme);
     }
 
     private void createWebView() {
@@ -427,19 +462,22 @@ public class SiteViewPlugin extends Plugin {
             // サブフレーム(Cloudflare チャレンジ iframe 等)は触らない
             if (!request.isForMainFrame()) return false;
             Uri uri = request.getUrl();
-            String scheme = uri.getScheme();
-            if ("http".equals(scheme) || "https".equals(scheme)) {
-                if (isAllowedHost(uri.getHost())) return false;
-                openExternally(uri);
-                return true;
-            }
-            if ("about".equals(scheme) || "data".equals(scheme) || "blob".equals(scheme)) return false;
-            openExternally(uri); // mailto:, intent: など
+            if (isInAppUrl(uri)) return false;
+            // リダイレクト・window.open・target=_blank もここを通る。遷移を止めて通知のみ(自動では開かない)
+            emitExternal(uri.toString());
             return true;
         }
 
         @Override
         public void onPageStarted(WebView view, String url, Bitmap favicon) {
+            // 保険: 許可外ホストがここまで来たら読み込みを止め、戻れれば戻り、通知する
+            if (url != null && !isInAppUrl(Uri.parse(url))) {
+                view.stopLoading();
+                if (view.canGoBack()) view.goBack();
+                loading = false;
+                emitExternal(url);
+                return;
+            }
             loading = true;
             emitPage("pageStarted", url);
         }

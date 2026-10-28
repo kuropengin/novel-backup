@@ -43,3 +43,58 @@ export function classifyUrl(input: string): PageKind | null {
   }
   return null;
 }
+
+/**
+ * アプリ内(SiteView)で開いてよいホスト(サブドメイン含む)。唯一の許可リスト。
+ * 注意: SiteViewPlugin.java の ALLOWED_HOST_SUFFIXES / isAllowedHost / isInAppUrl と必ず一致させること。
+ */
+export const ALLOWED_HOST_SUFFIXES = ["syosetu.org", "syosetu.com", "kakuyomu.jp"] as const;
+
+export function isAllowedHost(host: string | null | undefined): boolean {
+  if (!host) return false;
+  const h = host.toLowerCase();
+  return ALLOWED_HOST_SUFFIXES.some((s) => h === s || h.endsWith("." + s));
+}
+
+/** アプリ内で開いてよい URL か(許可ホストの http(s)、または about/data/blob)。 */
+export function isInAppUrl(input: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(input);
+  } catch {
+    return false;
+  }
+  if (url.protocol === "http:" || url.protocol === "https:") return isAllowedHost(url.hostname);
+  return url.protocol === "about:" || url.protocol === "data:" || url.protocol === "blob:";
+}
+
+/**
+ * 外部リンクの開き先を決める。http/https/mailto/tel はそのまま、intent: は browser_fallback_url(http(s))があればそれ、
+ * それ以外(javascript: 等)は null(開けない)。
+ */
+export function externalOpenTarget(input: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(input);
+  } catch {
+    return null;
+  }
+  const p = url.protocol;
+  if (p === "http:" || p === "https:" || p === "mailto:" || p === "tel:") return input;
+  if (p === "intent:") {
+    const m = /;S\.browser_fallback_url=([^;]+)/.exec(input);
+    if (!m) return null;
+    try {
+      const fb = decodeURIComponent(m[1]);
+      return /^https?:\/\//i.test(fb) ? fb : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** 確認ダイアログ表示用に URL を切り詰める。 */
+export function truncateUrl(url: string, max = 100): string {
+  return url.length > max ? url.slice(0, max - 1) + "…" : url;
+}

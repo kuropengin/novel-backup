@@ -6,7 +6,7 @@ Capacitor 7 + Vue 3 + TypeScript + Vite。`appId: local.novelbackup.app`、`appN
 
 | 項目 | 内容 |
 |---|---|
-| サイト表示 | 自作 Capacitor プラグイン `SiteView`(`android/.../SiteViewPlugin.java`、TS は `src/native/siteView.ts`)。アプリ WebView の上にネイティブ WebView を矩形(上下インセット)で重ねる。仕様は [04_mobile_redesign.md](04_mobile_redesign.md)。3 サイト外のホストへの遷移は外部ブラウザ |
+| サイト表示 | 自作 Capacitor プラグイン `SiteView`(`android/.../SiteViewPlugin.java`、TS は `src/native/siteView.ts`)。アプリ WebView の上にネイティブ WebView を矩形(上下インセット)で重ねる。仕様は [04_mobile_redesign.md](04_mobile_redesign.md)。3 サイト外のホスト/スキームへは**遷移せず**、確認ダイアログ(「外部サイトへのリンクです。ブラウザで開きますか?」+URL)で OK のときだけ既定ブラウザで開く(下記「外部リンク」) |
 | 通信 | `CapacitorHttp.request`(ネイティブ HTTP。CORS 回避)。認証は `Authorization: Bearer` |
 | 保存 | `@capacitor/preferences`(サーバー URL・トークン・ユーザー名・ロール・本文表示設定。端末ローカル) |
 | 平文 HTTP | LAN サーバーに接続するため `android:usesCleartextTraffic="true"` |
@@ -80,3 +80,7 @@ npm run mobile:apk    # gradlew assembleDebug → mobile/android/app/build/outpu
 ```
 
 `mobile/scripts/apk.mjs` は JAVA_HOME が未設定または JDK 22 以上のとき `%USERPROFILE%\.jdks` から JDK 21 を自動検出し、ANDROID_HOME が未設定なら `%LOCALAPPDATA%\Android\Sdk` を使う。詳細は [mobile/README.md](../mobile/README.md)。
+
+## 外部リンク
+
+アプリは `narou` / `kakuyomu` / `hameln`(`syosetu.org`、`*.syosetu.com`、`kakuyomu.jp` とサブドメイン)以外へは遷移しない。許可外のリンク(リダイレクト、`window.open`、`target=_blank`、`mailto:`・`tel:`・`intent:` 等)をタップすると、SiteView は遷移を止めて `externalLink` イベントを送り、アプリがネイティブ確認「外部サイトへのリンクです。ブラウザで開きますか?」(URL 付き、長い場合は切り詰め)を表示する。OK のときだけ `openExternal` で既定ブラウザ等を起動(http/https/mailto/tel のみ。`intent:` は `browser_fallback_url` があればそれ、無ければ開けない旨を表示)。キャンセルなら何もしない。許可リストは `SiteViewPlugin.java` と `src/logic/sites.ts` で一致させる(`test/logic.test.ts` で TS 側を検証)。

@@ -34,5 +34,8 @@ export class SiteViewWeb extends WebPlugin implements SiteViewPlugin {
     return { result: "null" };
   }
   async insertCss(_o: { code: string }): Promise<void> {}
+  async openExternal(o: { url: string }): Promise<void> {
+    window.open(o.url, "_blank", "noopener");
+  }
 
 }

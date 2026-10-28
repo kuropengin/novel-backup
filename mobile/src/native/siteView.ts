@@ -23,6 +23,10 @@ export interface ScrollEvent {
   /** 前回からの差分(正 = 下へスクロール) */
   dy: number;
 }
+export interface ExternalLinkEvent {
+  /** アプリ内で開かず止めた URL(許可外ホスト/許可外スキーム) */
+  url: string;
+}
 export interface SiteViewState {
   open: boolean;
   url: string;
@@ -42,6 +46,9 @@ export interface SiteViewPlugin {
   evaluate(o: { code: string }): Promise<{ result: string }>;
   insertCss(o: { code: string }): Promise<void>;
   addListener(e: "pageStarted" | "pageFinished", cb: (d: PageEvent) => void): Promise<PluginListenerHandle>;
+  /** http/https/mailto/tel のみ。既定ブラウザ等で開く(開けなければ reject) */
+  openExternal(o: { url: string }): Promise<void>;
+  addListener(e: "externalLink", cb: (d: ExternalLinkEvent) => void): Promise<PluginListenerHandle>;
   addListener(e: "scroll", cb: (d: ScrollEvent) => void): Promise<PluginListenerHandle>;
 }
 

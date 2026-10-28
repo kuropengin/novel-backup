@@ -20,6 +20,7 @@ import { buildCss, type DisplaySettings } from "./display";
 import { pageInfoCode, type PageInfo } from "./inject";
 import { SiteView, evaluateJson } from "./native/siteView";
 import { confirmNative } from "./native/dialogs";
+import { externalOpenTarget, truncateUrl } from "./logic/sites";
 import { ScrollHideController } from "./logic/scrollHide";
 import { classifyUrl, type PageKind } from "./logic/sites";
 import { bottomH, topH } from "./stores/layout";
@@ -305,6 +306,30 @@ async function onBack() {
   void CapApp.exitApp();
 }
 
+let lastExternal = { url: "", at: 0 };
+let externalBusy = false;
+/** 許可外リンク: 自動では開かず、確認 → OK のときだけ既定ブラウザで開く。同一 URL の連続イベントは 1 秒間無視。 */
+async function onExternalLink(url: string) {
+  const now = Date.now();
+  if (externalBusy || (url === lastExternal.url && now - lastExternal.at < 1000)) return;
+  lastExternal = { url, at: now };
+  externalBusy = true;
+  try {
+    const ok = await confirmNative(`外部サイトへのリンクです。ブラウザで開きますか?\n\n${truncateUrl(url)}`, "外部リンク");
+    if (!ok) return;
+    const target = externalOpenTarget(url);
+    if (!target) return showToast("このリンクは開けません");
+    try {
+      await SiteView.openExternal({ url: target });
+    } catch (e) {
+      showToast(errorMessage(e));
+    }
+  } finally {
+    externalBusy = false;
+    lastExternal.at = Date.now();
+  }
+}
+
 onMounted(async () => {
   window.addEventListener("scroll", onWindowScroll, { passive: true });
   handles.push(
@@ -314,6 +339,7 @@ onMounted(async () => {
       const r = ctl.feed(e.dy, e.y, performance.now());
       if (r !== null) setHidden(r);
     }),
+    await SiteView.addListener("externalLink", (e) => void onExternalLink(e.url)),
     await CapApp.addListener("backButton", () => void onBack()),
   );
   offReconnect = onReconnect(() => void flushHistory(cfg()));
