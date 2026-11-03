@@ -11,7 +11,21 @@ describe("migrations", () => {
   it("fresh db ends with users, sessions, novels, bookmarks, history", () => {
     const db = new DatabaseSync(":memory:");
     runMigrations(db);
-    expect(tables(db)).toEqual(["bookmarks", "history", "novels", "sessions", "users"]);
+    expect(tables(db)).toEqual([
+      "backup_run_stats",
+      "backup_settings",
+      "backup_tasks",
+      "bookmarks",
+      "episode_versions",
+      "episodes",
+      "history",
+      "notifications",
+      "novel_meta_versions",
+      "novels",
+      "reading_progress",
+      "sessions",
+      "users",
+    ]);
   });
 
   it("upgrades an old (v1) database and keeps users and bookmarks", () => {
@@ -30,7 +44,21 @@ describe("migrations", () => {
     `);
     runMigrations(db);
 
-    expect(tables(db)).toEqual(["bookmarks", "history", "novels", "sessions", "users"]);
+    expect(tables(db)).toEqual([
+      "backup_run_stats",
+      "backup_settings",
+      "backup_tasks",
+      "bookmarks",
+      "episode_versions",
+      "episodes",
+      "history",
+      "notifications",
+      "novel_meta_versions",
+      "novels",
+      "reading_progress",
+      "sessions",
+      "users",
+    ]);
     expect(db.prepare("SELECT username FROM users").all()).toEqual([{ username: "admin" }]);
     expect(db.prepare("SELECT note, novel_id FROM bookmarks").all()).toEqual([{ note: "memo", novel_id: 1 }]);
     expect(db.prepare("SELECT title FROM novels").all()).toEqual([{ title: "T" }]);

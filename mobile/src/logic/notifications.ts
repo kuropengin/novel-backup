@@ -1,6 +1,7 @@
 /** お知らせ(端末内通知)の純粋なストア操作。永続化は stores/notifications.ts。 */
 export interface AppNotification {
   id: string;
+  serverId?: number;
   /** 通知の種類(例: "offline-saved", "backup-done") */
   kind: string;
   title: string;
@@ -43,6 +44,7 @@ export function sanitizeNotifications(input: unknown): AppNotification[] {
     if (typeof o.id !== "string" || typeof o.title !== "string" || typeof o.createdAt !== "string") continue;
     out.push({
       id: o.id,
+      serverId: typeof o.serverId === "number" ? o.serverId : undefined,
       kind: typeof o.kind === "string" ? o.kind : "",
       title: o.title,
       body: typeof o.body === "string" ? o.body : "",

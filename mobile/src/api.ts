@@ -5,6 +5,8 @@ export class ApiError extends Error {
     public status: number,
     public code: string,
     message?: string,
+    /** 429 のとき、再試行までの秒数(Retry-After / retryAfter) */
+    public retryAfter?: number,
   ) {
     super(message || code);
   }
@@ -22,6 +24,58 @@ export interface Bookmark {
   url: string;
   note?: string;
   createdAt: string;
+  lastBackupMetadataAt?: string | null;
+  lastBackupAllAt?: string | null;
+  backupEpisodeCount?: number;
+  /** 元サイトで最新話が更新された日時(ISO) */
+  sourceUpdatedAt?: string | null;
+  /** 既読話数・最後に読んだ話(サーバー側の読書進捗) */
+  readEpisodeCount?: number;
+  lastReadEpisodeKey?: string | null;
+  lastReadAt?: string | null;
+}
+
+export interface ReadingProgress {
+  readEpisodeKeys: string[];
+  lastReadEpisodeKey: string | null;
+  lastReadAt: string | null;
+}
+
+export interface Notification {
+  id: number;
+  type: "backup" | "error";
+  title: string;
+  message?: string;
+  novelKey?: string;
+  read: boolean;
+  createdAt: string;
+}
+
+export interface BackupEpisode {
+  episodeKey: string;
+  position: number;
+  title: string;
+  bodyHtml: string;
+  prefaceHtml?: string | null;
+  afterwordHtml?: string | null;
+  updatedAt?: string | null;
+  /** 元サイトでの公開日時 */
+  publishedAt?: string | null;
+  fetchedAt: string;
+  version: number;
+}
+
+export interface BackupScheduleSettings {
+  frequency: "hourly" | "daily" | "weekly";
+  time: string;
+  maxParallel: number;
+}
+
+export interface BackupStatus {
+  running: boolean;
+  frequency: "hourly" | "daily" | "weekly";
+  currentRunId: number | null;
+  taskStats: { pending: number; inProgress: number; completed: number; failed: number };
 }
 
 export interface HistoryItem {
@@ -98,8 +152,14 @@ async function call<T>(cfg: ApiConfig, method: string, path: string, body?: unkn
     }
   }
   if (res.status >= 400) {
-    const d = (data ?? {}) as { error?: string; message?: string };
-    throw new ApiError(res.status, d.error ?? `http_${res.status}`, d.message);
+    const d = (data ?? {}) as { error?: string; message?: string; retryAfter?: number };
+    let retryAfter = typeof d.retryAfter === "number" ? d.retryAfter : undefined;
+    if (retryAfter === undefined && res.status === 429) {
+      const h = Object.entries(res.headers ?? {}).find(([k]) => k.toLowerCase() === "retry-after")?.[1];
+      const n = Number(h);
+      if (Number.isFinite(n) && n > 0) retryAfter = n;
+    }
+    throw new ApiError(res.status, d.error ?? `http_${res.status}`, d.message, retryAfter);
   }
   return { status: res.status, data: data as T };
 }
@@ -113,8 +173,8 @@ export async function login(serverUrl: string, username: string, password: strin
 }
 
 /** 初回のみ: 最初の管理者を作成し、そのままトークンを受け取る */
-export async function setupAdmin(serverUrl: string, username: string, password: string): Promise<TokenResult> {
-  return (await call<TokenResult>({ serverUrl, token: "" }, "POST", "/api/auth/setup", { username, password, token: true }, false)).data;
+export async function setupAdmin(serverUrl: string, username: string, password: string, setupToken: string): Promise<TokenResult> {
+  return (await call<TokenResult>({ serverUrl, token: "" }, "POST", "/api/auth/setup", { username, password, setupToken, token: true }, false)).data;
 }
 
 export async function changePassword(cfg: ApiConfig, currentPassword: string, newPassword: string): Promise<void> {
@@ -179,6 +239,60 @@ export async function deleteBookmark(cfg: ApiConfig, id: number): Promise<void> 
   await call(cfg, "DELETE", `/api/bookmarks/${id}`);
 }
 
+export async function listNotifications(cfg: ApiConfig): Promise<{ notifications: Notification[]; unreadCount: number }> {
+  return (await call<{ notifications: Notification[]; unreadCount: number }>(cfg, "GET", "/api/notifications")).data;
+}
+
+export async function markNotificationAsRead(cfg: ApiConfig, notificationId: number): Promise<void> {
+  await call(cfg, "POST", `/api/notifications/${notificationId}/read`);
+}
+
+export async function deleteNotification(cfg: ApiConfig, notificationId: number): Promise<void> {
+  await call(cfg, "DELETE", `/api/notifications/${notificationId}`);
+}
+
+export async function triggerNovelBackup(cfg: ApiConfig, site: string, novelKey: string): Promise<void> {
+  try {
+    await call(cfg, "POST", `/api/backup/novels/${encodeURIComponent(site)}/${encodeURIComponent(novelKey)}/trigger`, {});
+  } catch (e) {
+    // 即時バックアップ専用の回数制限メッセージにするため、コードを差し替える
+    if (e instanceof ApiError && e.status === 429) throw new ApiError(429, "backup_rate_limited", undefined, e.retryAfter);
+    throw e;
+  }
+}
+
+export async function listBackupEpisodes(cfg: ApiConfig, site: string, novelKey: string): Promise<BackupEpisode[]> {
+  const response = await call<{ episodes: BackupEpisode[] }>(
+    cfg,
+    "GET",
+    `/api/backup/novels/${encodeURIComponent(site)}/${encodeURIComponent(novelKey)}/episodes`
+  );
+  return response.data.episodes;
+}
+
+export async function getReadingProgress(cfg: ApiConfig, site: string, novelKey: string): Promise<ReadingProgress> {
+  const d = (await call<Partial<ReadingProgress>>(cfg, "GET", `/api/reading-progress/${encodeURIComponent(site)}/${encodeURIComponent(novelKey)}`)).data;
+  return { readEpisodeKeys: d.readEpisodeKeys ?? [], lastReadEpisodeKey: d.lastReadEpisodeKey ?? null, lastReadAt: d.lastReadAt ?? null };
+}
+
+export async function setEpisodeRead(cfg: ApiConfig, site: string, novelKey: string, episodeKey: string, read: boolean): Promise<void> {
+  await call(cfg, "PUT", `/api/reading-progress/${encodeURIComponent(site)}/${encodeURIComponent(novelKey)}/${encodeURIComponent(episodeKey)}`, { read });
+}
+
+export async function getBackupSettings(cfg: ApiConfig): Promise<BackupScheduleSettings> {
+  const response = await call<{ settings: BackupScheduleSettings }>(cfg, "GET", "/api/backup/settings");
+  return response.data.settings;
+}
+
+export async function updateBackupSettings(cfg: ApiConfig, settings: BackupScheduleSettings): Promise<BackupScheduleSettings> {
+  const response = await call<{ settings: BackupScheduleSettings }>(cfg, "PUT", "/api/backup/settings", settings);
+  return response.data.settings;
+}
+
+export async function getBackupStatus(cfg: ApiConfig): Promise<BackupStatus> {
+  return (await call<BackupStatus>(cfg, "GET", "/api/backup/status")).data;
+}
+
 const MESSAGES: Record<string, string> = {
   invalid_credentials: "ユーザー名またはパスワードが正しくありません",
   too_many_requests: "試行回数が多すぎます。しばらく待ってから再試行してください",
@@ -190,11 +304,25 @@ const MESSAGES: Record<string, string> = {
   cannot_delete_self: "自分自身は削除できません",
   last_admin: "最後の管理者は削除・降格できません",
   not_found: "対象が見つかりません",
+  setup_disabled: "サーバーで SETUP_TOKEN が設定されていないため初期設定できません",
+  invalid_setup_token: "セットアップトークンが正しくありません",
+  internal_error: "サーバーでエラーが発生しました。しばらくしてから再試行してください",
   validation_error: "入力内容が正しくありません(ユーザー名は英数字・_・- の 3〜32 文字、パスワードは 8〜128 文字)",
 };
 
+/** 秒数 → 「約N分」(1 分未満は「約1分」)。不明なら「しばらく」。 */
+function waitText(sec?: number): string {
+  if (!sec || sec <= 0) return "しばらく";
+  return `約${Math.max(1, Math.ceil(sec / 60))}分`;
+}
+
 export function errorMessage(e: unknown): string {
   if (e instanceof NetworkError) return "サーバーに接続できません";
-  if (e instanceof ApiError) return MESSAGES[e.code] ?? e.message;
+  if (e instanceof ApiError) {
+    if (e.code === "backup_rate_limited") return `即時バックアップの回数制限中です。${waitText(e.retryAfter)}後に再度お試しください`;
+    if (e.status === 429 && !MESSAGES[e.code]) return `リクエストが多すぎます。${waitText(e.retryAfter)}後に再度お試しください`;
+    if (e.status >= 500 && !MESSAGES[e.code]) return MESSAGES.internal_error;
+    return MESSAGES[e.code] ?? e.message;
+  }
   return e instanceof Error ? e.message : String(e);
 }

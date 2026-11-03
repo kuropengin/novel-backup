@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import Icon from "../components/Icon.vue";
 import { ApiError, authStatus, errorMessage, login, setupAdmin, type TokenResult } from "../api";
 import { normalizeServerUrl, type Settings } from "../storage";
+import { isInsecureRemote } from "../logic/serverUrl";
+import { confirmNative } from "../native/dialogs";
 
 /** ログイン前の画面: サーバー URL の確認 → 初期設定(最初の管理者作成)またはログイン。 */
 const props = defineProps<{ settings: Settings }>();
@@ -14,8 +16,11 @@ const serverState = ref<"unknown" | "setup" | "login">("unknown");
 const username = ref(props.settings.username);
 const password = ref("");
 const confirmPw = ref("");
+const setupToken = ref("");
 const busy = ref(false);
 const error = ref("");
+
+const insecureWarning = computed(() => isInsecureRemote(serverUrl.value));
 
 async function checkServer() {
   error.value = "";
@@ -25,12 +30,22 @@ async function checkServer() {
     return;
   }
   serverUrl.value = url;
+  // 外部ホストへの平文 HTTP は、確認が取れた場合のみ接続する
+  if (isInsecureRemote(url)) {
+    const ok = await confirmNative(
+      "この接続は暗号化されていません(http)。パスワードやトークンが第三者に盗み見られる恐れがあります。\n\nhttps:// の URL の利用を推奨します。それでも接続しますか?",
+      "暗号化されていない接続",
+      "接続する",
+    );
+    if (!ok) return;
+  }
   busy.value = true;
   try {
     const st = await authStatus(url);
     serverState.value = st.setupRequired ? "setup" : "login";
     password.value = "";
     confirmPw.value = "";
+    setupToken.value = "";
   } catch (e) {
     serverState.value = "unknown";
     error.value = errorMessage(e);
@@ -45,6 +60,7 @@ onMounted(() => {
 function finish(url: string, r: TokenResult) {
   password.value = "";
   confirmPw.value = "";
+  setupToken.value = "";
   emit("changed", { serverUrl: url, token: r.token, username: r.user.username, role: r.user.role });
 }
 
@@ -74,9 +90,13 @@ async function doSetup() {
     error.value = "パスワード(確認)が一致しません";
     return;
   }
+  if (!setupToken.value) {
+    error.value = "セットアップトークンを入力してください";
+    return;
+  }
   busy.value = true;
   try {
-    finish(serverUrl.value, await setupAdmin(serverUrl.value, username.value, password.value));
+    finish(serverUrl.value, await setupAdmin(serverUrl.value, username.value, password.value, setupToken.value));
   } catch (e) {
     error.value = errorMessage(e);
     if (e instanceof ApiError && e.code === "already_setup") serverState.value = "login";
@@ -94,7 +114,7 @@ async function doSetup() {
 
     <div class="card">
       <label for="srv" style="margin-top: 0">サーバー URL</label>
-      <input id="srv" v-model="serverUrl" type="url" inputmode="url" autocapitalize="off" placeholder="http://192.168.1.10:3000" @input="serverState = 'unknown'" @keyup.enter="checkServer" />
+      <input id="srv" v-model="serverUrl" type="url" inputmode="url" autocapitalize="off" placeholder="https://example.com" @input="serverState = 'unknown'" @keyup.enter="checkServer" />
       <div class="row" style="margin-top: 10px">
         <button :disabled="busy" @click="checkServer">{{ serverState === "unknown" ? "接続して確認" : "再確認" }}</button>
       </div>
@@ -102,6 +122,8 @@ async function doSetup() {
       <template v-if="serverState === 'setup'">
         <h2>初期設定</h2>
         <p class="muted">このサーバーにはまだユーザーがいません。最初の管理者アカウントを作成します。</p>
+        <label for="stk">セットアップトークン(サーバーの SETUP_TOKEN)</label>
+        <input id="stk" v-model="setupToken" type="password" autocapitalize="off" autocomplete="off" />
         <label for="su">ユーザー名(英数字・_・- の 3〜32 文字)</label>
         <input id="su" v-model="username" autocapitalize="off" autocomplete="username" />
         <label for="sp">パスワード(8 文字以上)</label>
@@ -123,8 +145,9 @@ async function doSetup() {
           <button :disabled="busy" @click="doLogin">ログイン</button>
         </div>
       </template>
+      <p v-if="insecureWarning" class="error">⚠ 暗号化されていない接続(http)です。パスワードやトークンが盗み見られる恐れがあります。</p>
       <p v-if="error" class="error">{{ error }}</p>
     </div>
-    <p class="muted">エミュレータからは http://10.0.2.2:3000 、実機からはサーバー PC の LAN アドレスを指定してください。</p>
+    <p class="muted">公開サーバーは https:// の URL を指定してください。開発時はエミュレータなら http://10.0.2.2:3000 、実機ならサーバー PC の LAN アドレス(デバッグビルドのみ http 可)を指定します。</p>
   </div>
 </template>

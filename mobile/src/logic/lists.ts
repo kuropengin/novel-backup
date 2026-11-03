@@ -7,7 +7,10 @@ export interface BookmarkLike {
   title: string;
   author: string;
   createdAt: string;
-  /** オフライン保存済みか(今回は未対応で常に false/未定義) */
+  updatedAt?: string;
+  /** 元サイトでの最終更新日時(更新日ソートの第一キー) */
+  sourceUpdatedAt?: string | null;
+  /** オフライン保存済みか */
   offlineSaved?: boolean;
 }
 
@@ -16,7 +19,7 @@ export type SortOrder = "asc" | "desc";
 
 export const SORT_OPTIONS: { key: SortKey; label: string; note?: string }[] = [
   { key: "added", label: "追加日" },
-  { key: "updated", label: "更新日", note: "未対応(追加日で代用)" },
+  { key: "updated", label: "更新日" },
   { key: "title", label: "タイトル" },
   { key: "site", label: "サイト" },
 ];
@@ -34,13 +37,20 @@ export function filterBookmarks<T extends BookmarkLike>(items: readonly T[], q: 
 export function sortBookmarks<T extends BookmarkLike>(items: readonly T[], key: SortKey, order: SortOrder): T[] {
   const dir = order === "asc" ? 1 : -1;
   const added = (a: T, b: T) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id;
+  // 元サイトの更新日を優先(null は最も古い扱い=降順で末尾)。同値・null 同士はバックアップ日→追加日の順
+  const updated = (a: T, b: T) =>
+    (a.sourceUpdatedAt ?? "").localeCompare(b.sourceUpdatedAt ?? "") ||
+    (a.updatedAt ?? a.createdAt).localeCompare(b.updatedAt ?? b.createdAt) ||
+    added(a, b);
   const cmp = (a: T, b: T): number => {
     switch (key) {
       case "title":
         return a.title.localeCompare(b.title, "ja") || added(a, b);
       case "site":
         return a.site.localeCompare(b.site) || added(a, b);
-      default: // added / updated(更新日はデータが無いので追加日で代用)
+      case "updated":
+        return updated(a, b);
+      default:
         return added(a, b);
     }
   };

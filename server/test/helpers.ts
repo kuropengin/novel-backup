@@ -5,9 +5,11 @@ import { openDb } from "../src/db/index.js";
 
 export type App = ReturnType<typeof createApp>;
 
-export function setupApp() {
+export const SETUP_TOKEN = "test-setup-token";
+
+export function setupApp(opts: Partial<Parameters<typeof createApp>[0]> = {}) {
   const db = openDb(":memory:");
-  const app = createApp({ db });
+  const app = createApp({ db, setupToken: SETUP_TOKEN, ...opts });
   return { db, app };
 }
 
@@ -18,6 +20,7 @@ export function client(app: App, token?: string) {
     token,
     get: (p: string) => h(request(app).get(p)),
     post: (p: string) => h(request(app).post(p)),
+    put: (p: string) => h(request(app).put(p)),
     patch: (p: string) => h(request(app).patch(p)),
     delete: (p: string) => h(request(app).delete(p)),
   };
@@ -25,7 +28,7 @@ export function client(app: App, token?: string) {
 export type Client = ReturnType<typeof client>;
 
 export async function makeAdmin(app: App) {
-  const res = await request(app).post("/api/auth/setup").send({ username: "admin", password: "password123" });
+  const res = await request(app).post("/api/auth/setup").send({ username: "admin", password: "password123", setupToken: SETUP_TOKEN });
   expect(res.status).toBe(201);
   return client(app, res.body.token as string);
 }

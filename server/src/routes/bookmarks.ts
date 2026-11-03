@@ -51,12 +51,31 @@ interface BookmarkRow {
   title: string;
   author: string;
   url: string;
+  source_updated_at: string | null;
+  read_episode_count: number;
+  last_read_at: string | null;
 }
 
+// 既読は reading_progress(ユーザー別)。最終既読話は read_at が最新のもの(なければ bookmarks.last_read_episode_key)
+const PROGRESS_WHERE = "rp.user_id = b.user_id AND rp.site = n.site AND rp.novel_key = n.novel_key";
 const SELECT = `
-  SELECT b.id, b.novel_id, b.note, b.last_read_episode_key, b.created_at,
-         n.site, n.novel_key, n.title, n.author, n.url
+  SELECT b.id, b.novel_id, b.note, b.created_at,
+         n.site, n.novel_key, n.title, n.author, n.url,
+         n.last_backup_metadata_at, n.last_backup_all_at, n.backup_episode_count,
+         n.source_updated_at,
+         (SELECT COUNT(*) FROM reading_progress rp WHERE ${PROGRESS_WHERE}) AS read_episode_count,
+         COALESCE(
+           (SELECT rp.episode_key FROM reading_progress rp WHERE ${PROGRESS_WHERE} ORDER BY rp.read_at DESC, rp.episode_key DESC LIMIT 1),
+           b.last_read_episode_key
+         ) AS last_read_episode_key,
+         (SELECT rp.read_at FROM reading_progress rp WHERE ${PROGRESS_WHERE} ORDER BY rp.read_at DESC, rp.episode_key DESC LIMIT 1) AS last_read_at
   FROM bookmarks b JOIN novels n ON n.id = b.novel_id`;
+
+/** 作者が未取得(空 / スクレイパーの取得失敗値 "Unknown")か。 */
+export function isBlankAuthor(a: string | null | undefined): boolean {
+  const t = (a ?? "").trim();
+  return t === "" || t === "Unknown";
+}
 
 export function toBookmarkDto(r: BookmarkRow) {
   return {
@@ -65,11 +84,17 @@ export function toBookmarkDto(r: BookmarkRow) {
     site: r.site,
     novelKey: r.novel_key,
     title: r.title,
-    author: r.author,
+    author: isBlankAuthor(r.author) ? "" : r.author,
     url: r.url,
     note: r.note,
     lastReadEpisodeKey: r.last_read_episode_key,
+    lastReadAt: r.last_read_at,
+    readEpisodeCount: r.read_episode_count,
+    sourceUpdatedAt: r.source_updated_at,
     createdAt: r.created_at,
+    lastBackupMetadataAt: (r as any).last_backup_metadata_at ?? null,
+    lastBackupAllAt: (r as any).last_backup_all_at ?? null,
+    backupEpisodeCount: (r as any).backup_episode_count ?? 0,
   };
 }
 
@@ -102,10 +127,10 @@ export function bookmarksRouter(db: Db): Router {
     const b = getOne(userId, bookmarkId);
     if (!b) return;
     if (!b.title) db.prepare("UPDATE novels SET title = ? WHERE id = ?").run(title, b.novel_id);
-    if (!b.author && author) db.prepare("UPDATE novels SET author = ? WHERE id = ?").run(author, b.novel_id);
+    if (isBlankAuthor(b.author) && author) db.prepare("UPDATE novels SET author = ? WHERE id = ?").run(author, b.novel_id);
   }
 
-  // q: タイトル/作者/サイト(id・日本語名)の部分一致。sort: added|updated|title|site(updated は当面 added と同じ)
+  // q: タイトル/作者/サイト(id・日本語名)の部分一致。sort: added|updated|title|site(updated は元サイトでの最新話更新日時 source_updated_at。未取得は常に末尾)
   router.get("/", (req, res) => {
     const parsed = listQuerySchema.safeParse(req.query);
     if (!parsed.success) return void res.status(400).json({ error: "validation_error", details: parsed.error.issues });
@@ -116,7 +141,9 @@ export function bookmarksRouter(db: Db): Router {
         ? `n.title COLLATE NOCASE ${dir}, b.id DESC`
         : sort === "site"
           ? `n.site ${dir}, b.created_at DESC, b.id DESC`
-          : `b.created_at ${dir}, b.id ${dir}`;
+          : sort === "updated"
+            ? `(n.source_updated_at IS NULL) ASC, n.source_updated_at ${dir}, b.created_at DESC, b.id DESC`
+            : `b.created_at ${dir}, b.id ${dir}`;
     const params: (string | number)[] = [req.user!.id];
     let where = "WHERE b.user_id = ?";
     if (q) {

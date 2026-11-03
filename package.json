@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.2.0",
   "engines": {
-    "node": ">=22.13"
+    "node": ">=26"
   },
   "workspaces": [
     "server",
@@ -19,6 +19,6 @@
     "mobile:apk": "node mobile/scripts/apk.mjs"
   },
   "devDependencies": {
-    "typescript": "~5.9.3"
+    "typescript": "~6.0.3"
   }
 }

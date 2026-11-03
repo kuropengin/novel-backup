@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">
+  <!-- 小説ビューア アプリアイコン前景(108dp アダプティブアイコン。主要素は中央 66dp の安全領域内) -->
+  <!-- 開いた本 -->
+  <path d="M27 38 C36 34 47 35 54 41 L54 75 C47 70 36 69 27 72 Z" fill="#ffffff"/>
+  <path d="M81 38 C72 34 61 35 54 41 L54 75 C61 70 72 69 81 72 Z" fill="#ffffff"/>
+  <!-- 本文の行 -->
+  <g stroke="#9fd3f7" stroke-width="2.2" stroke-linecap="round" fill="none">
+    <path d="M32 46 C38 44 44 44.5 49 47"/>
+    <path d="M32 53 C38 51 44 51.5 49 54"/>
+    <path d="M32 60 C38 58 44 58.5 49 61"/>
+    <path d="M59 47 C64 44.5 70 44 76 46"/>
+    <path d="M59 54 C64 51.5 70 51 76 53"/>
+  </g>
+  <!-- バックアップ(クラウド保存)バッジ -->
+  <circle cx="72" cy="68" r="12" fill="#0b5f99" stroke="#ffffff" stroke-width="2.5"/>
+  <path d="M72 61.5 L72 72.5 M67.5 68.5 L72 73 L76.5 68.5" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

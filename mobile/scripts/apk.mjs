@@ -64,5 +64,13 @@ console.log(`Android SDK: ${env.ANDROID_HOME ?? env.ANDROID_SDK_ROOT ?? "(未設
 const cmd = win ? `"${path.join(dir, "gradlew.bat")}"` : "./gradlew";
 const r = spawnSync(cmd, ["assembleDebug"], { cwd: dir, stdio: "inherit", shell: win, env });
 if (r.error) console.error(r.error.message);
-else if (r.status === 0) console.log("APK: mobile/android/app/build/outputs/apk/debug/app-debug.apk");
+else if (r.status === 0) {
+  console.log("APK: mobile/android/app/build/outputs/apk/debug/app-debug.apk");
+  // サーバーの公開ダウンロード(/download)用に <DATA_DIR>/apk/novel-backup.apk へコピー
+  const dataDir = env.DATA_DIR ? path.resolve(env.DATA_DIR) : path.join(dir, "..", "..", "data");
+  const dest = path.join(dataDir, "apk", "novel-backup.apk");
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.copyFileSync(path.join(dir, "app", "build", "outputs", "apk", "debug", "app-debug.apk"), dest);
+  console.log(`配布用: ${dest} (サーバーの /download から取得可能)`);
+}
 process.exit(r.status ?? 1);

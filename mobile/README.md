@@ -6,7 +6,7 @@
 
 ## 前提
 
-- Node.js 22.13 以上、JDK 21、Android SDK(Android Studio に同梱)。
+- Node.js 26 以上、JDK 21、Android SDK(Android Studio に同梱)。
 - サーバー(ルートの `npm start`)が起動していること。
 
 ## ビルドとインストール
@@ -21,8 +21,9 @@ npm run mobile:apk    # gradlew assembleDebug
 
 `npm run mobile:apk` は JAVA_HOME が未設定または JDK 22 以上の場合 `%USERPROFILE%\.jdks` の JDK 21 を、ANDROID_HOME が未設定なら `%LOCALAPPDATA%\Android\Sdk` を自動で使います(使用 JDK を表示)。
 
-APK は `mobile/android/app/build/outputs/apk/debug/app-debug.apk` に出力されます。
+APK は `mobile/android/app/build/outputs/apk/debug/app-debug.apk` に出力され、配布用に `data/apk/novel-backup.apk`(`DATA_DIR` 指定時は `<DATA_DIR>/apk/`)へもコピーされます。
 
+- サーバー経由: 端末のブラウザで `<サーバーURL>/download` を開いてダウンロード(認証不要。サーバー再起動は不要)。
 - adb: `adb install -r mobile/android/app/build/outputs/apk/debug/app-debug.apk`
 - Android Studio: `npx cap open android` → 端末/エミュレータを選んで Run。
 - APK を端末へ転送して手動インストールしても構いません。
@@ -46,6 +47,5 @@ APK は `mobile/android/app/build/outputs/apk/debug/app-debug.apk` に出力さ�
 ## 注意
 
 - ハーメルンの作品タイトル取得と本文セレクタは実ページで未検証です(推測のセレクタ + `document.title` の整形)。
-- Cloudflare のチャレンジが表示された場合、アプリは何も回避しません。ブラウザ画面上で利用者自身が通過してください。
 - ログイン期限(90 日)が切れる、またはパスワードが変更されると再ログインが必要です。
 - Android のみ対応です。

@@ -10,13 +10,16 @@ const props = defineProps<{ swipeable?: boolean }>();
 const emit = defineEmits<{ (e: "tap"): void; (e: "long"): void; (e: "swipe"): void }>();
 
 const LONG_MS = 550;
-const MOVE_TOL = 10;
+const MOVE_TOL = 20;
 const SWIPE_PX = 80;
+const TAP_SCROLL_PX = 40;
 
 const dx = ref(0);
 const dragging = ref(false);
 let sx = 0;
 let sy = 0;
+let mx = 0;
+let my = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let touched = false;
 let mode: "none" | "pending" | "swipe" | "scroll" | "long" = "none";
@@ -42,8 +45,8 @@ function start(e: TouchEvent) {
 function move(e: TouchEvent) {
   if (mode === "none" || mode === "long") return;
   const t = e.touches[0]!;
-  const mx = t.clientX - sx;
-  const my = t.clientY - sy;
+  mx = t.clientX - sx;
+  my = t.clientY - sy;
   if (mode === "pending") {
     if (Math.abs(mx) < MOVE_TOL && Math.abs(my) < MOVE_TOL) return;
     clear();
@@ -60,10 +63,14 @@ function move(e: TouchEvent) {
 function end() {
   clear();
   if (mode === "pending") emit("tap");
+  else if (mode === "scroll" && Math.abs(mx) <= TAP_SCROLL_PX && Math.abs(my) <= TAP_SCROLL_PX) emit("tap");
   else if (mode === "swipe" && dx.value <= -SWIPE_PX) emit("swipe");
   mode = "none";
+  touched = false;
   dragging.value = false;
   dx.value = 0;
+  mx = 0;
+  my = 0;
 }
 /** マウス操作(vite dev)用。タッチ操作では touchend 側で処理済み。 */
 function click() {
@@ -76,8 +83,11 @@ function click() {
 function cancel() {
   clear();
   mode = "none";
+  touched = false;
   dragging.value = false;
   dx.value = 0;
+  mx = 0;
+  my = 0;
 }
 </script>
 

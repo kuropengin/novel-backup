@@ -57,24 +57,23 @@ describe("history API", () => {
     await post(a, "https://ncode.syosetu.com/n1234ab/", { novelTitle: "Alpha", viewedAt: "2026-01-05T00:00:00Z" }); // 最後に作品ページ
   }
 
-  it("episode view: newest first, q, paging", async () => {
+  it("episode view: episodes only (no novel-page rows), newest first, q, paging", async () => {
     const { app } = setupApp();
     const a = await makeAdmin(app);
     await seed(a);
     const all = (await a.get("/api/history")).body;
     expect(all.view).toBe("episode");
+    // 作品ページのみの閲覧(Alpha/, Beta/)はエピソード毎には出さない
     expect(all.history.map((h: { novelTitle: string; episodeKey: string }) => `${h.novelTitle}/${h.episodeKey}`)).toEqual([
-      "Alpha/",
       "Gamma/1",
-      "Beta/",
       "Alpha/2",
       "Alpha/1",
     ]);
     expect((await a.get("/api/history?q=つづ")).body.history).toHaveLength(1);
-    expect((await a.get("/api/history?q=alpha")).body.history).toHaveLength(3);
+    expect((await a.get("/api/history?q=alpha")).body.history).toHaveLength(2);
     expect((await a.get("/api/history?q=%25")).body.history).toHaveLength(0); // ワイルドカードは無効
     const page = (await a.get("/api/history?limit=2&offset=1")).body.history;
-    expect(page.map((h: { novelTitle: string }) => h.novelTitle)).toEqual(["Gamma", "Beta"]);
+    expect(page.map((h: { novelTitle: string; episodeKey: string }) => `${h.novelTitle}/${h.episodeKey}`)).toEqual(["Alpha/2", "Alpha/1"]);
   });
 
   it("novel view: aggregates, prefers episode rows, counts episodes, filters", async () => {
@@ -114,15 +113,15 @@ describe("history API", () => {
     await post(v, `${NAROU}7/`, { novelTitle: "Mine", episodeTitle: "v7" });
     expect((await v.get("/api/history")).body.history).toHaveLength(1);
     expect((await v.get("/api/history?view=novel")).body.history).toHaveLength(1);
-    expect((await a.get("/api/history")).body.history).toHaveLength(5);
+    expect((await a.get("/api/history")).body.history).toHaveLength(3);
     const aliceEp = (await a.get("/api/history")).body.history.find((h: { episodeKey: string; site: string }) => h.site === "narou" && h.episodeKey === "2");
     expect(aliceEp.novelTitle).toBe("Alpha");
     // 他人の行は消せない。作品単位/全消去も自分の分だけ
     expect((await v.delete(`/api/history/${aliceEp.id}`)).status).toBe(404);
     expect((await v.delete("/api/history?site=narou&novelKey=n1234ab")).body.deleted).toBe(1);
-    expect((await a.get("/api/history")).body.history).toHaveLength(5);
+    expect((await a.get("/api/history")).body.history).toHaveLength(3);
     await v.delete("/api/history");
-    expect((await a.get("/api/history")).body.history).toHaveLength(5);
+    expect((await a.get("/api/history")).body.history).toHaveLength(3);
   });
 
   it("deletes one row, a novel, or everything", async () => {
@@ -136,7 +135,9 @@ describe("history API", () => {
     expect((await a.delete("/api/history/abc")).status).toBe(404);
     const d = await a.delete("/api/history?site=narou&novelKey=n1234ab");
     expect(d.body).toEqual({ ok: true, deleted: 3 });
-    expect((await a.get("/api/history")).body.history).toHaveLength(1);
+    // 残りは Beta の作品ページ行のみ(エピソード毎には出ないが作品毎には出る)
+    expect((await a.get("/api/history")).body.history).toHaveLength(0);
+    expect((await a.get("/api/history?view=novel")).body.history).toHaveLength(1);
     expect((await a.delete("/api/history")).body.deleted).toBe(1);
     expect((await a.get("/api/history")).body.history).toHaveLength(0);
   });

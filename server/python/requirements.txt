@@ -1,0 +1,4 @@
+scrapling==0.5
+curl-cffi>=0.17.0
+patchright>=1.64.3
+browserforge>=1.2.4

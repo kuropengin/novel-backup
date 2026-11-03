@@ -28,7 +28,13 @@ describe("bookmarks API", () => {
       url: "https://ncode.syosetu.com/n1234ab/",
       note: "",
       lastReadEpisodeKey: null,
+      lastReadAt: null,
+      readEpisodeCount: 0,
+      sourceUpdatedAt: null,
       createdAt: bm.createdAt,
+      lastBackupMetadataAt: null,
+      lastBackupAllAt: null,
+      backupEpisodeCount: 0,
     });
 
     // site + novelKey 指定、author は任意

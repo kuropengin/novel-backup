@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { App as CapApp } from "@capacitor/app";
 import type { PluginListenerHandle } from "@capacitor/core";
 import TopBar from "./components/TopBar.vue";
 import BottomBar from "./components/BottomBar.vue";
-import type { Tab } from "./types";
+import type { ReaderTarget, Tab } from "./types";
+import ReaderScreen from "./screens/ReaderScreen.vue";
+import EpisodeListScreen from "./screens/EpisodeListScreen.vue";
 import SideMenu from "./components/SideMenu.vue";
 import DisplaySheet from "./components/DisplaySheet.vue";
 import Icon from "./components/Icon.vue";
@@ -26,9 +28,10 @@ import { classifyUrl, type PageKind } from "./logic/sites";
 import { bottomH, topH } from "./stores/layout";
 import { toggleTheme } from "./stores/theme";
 import { online, onReconnect } from "./stores/network";
-import { unread } from "./stores/notifications";
+import { syncNotifications, unread } from "./stores/notifications";
 import { closeTopOverlay } from "./stores/overlays";
 import { flushHistory, recordView } from "./stores/historySync";
+import { flushReadPending } from "./stores/readProgress";
 
 const props = defineProps<{ settings: Settings; display: DisplaySettings }>();
 const emit = defineEmits<{ (e: "unauthorized"): void; (e: "logout"): void; (e: "display", d: DisplaySettings): void }>();
@@ -40,6 +43,13 @@ const sub = ref<Sub>(null);
 const menuOpen = ref(false);
 const displayOpen = ref(false);
 const siteOpen = ref(false);
+/** リーダー表示中の小説(null なら閉じている) */
+const reader = ref<ReaderTarget | null>(null);
+/** エピソード一覧画面で表示中の小説(null なら閉じている) */
+const epList = ref<ReaderTarget | null>(null);
+const readerRef = ref<InstanceType<typeof ReaderScreen> | null>(null);
+/** 戻る操作で復元するスクロール位置(リーダー用)。通常は 0 */
+const readerRestoreY = ref(0);
 const hidden = ref(false); // バー(上下)を隠している
 const toast = ref("");
 /** ★ の状態。kind が null なら作品/話ページではない(無効) */
@@ -49,8 +59,11 @@ const isAdmin = computed(() => props.settings.role === "admin");
 const cfg = () => ({ serverUrl: props.settings.serverUrl, token: props.settings.token });
 
 /** ネイティブのサイト表示を見せてよい状態か(オーバーレイ/他タブ/サブ画面では隠す) */
-const siteVisible = computed(() => siteOpen.value && tab.value === "home" && !sub.value && !menuOpen.value && !displayOpen.value);
-const showSiteHost = computed(() => siteOpen.value && tab.value === "home" && !sub.value);
+const siteVisible = computed(() => siteOpen.value && tab.value === "home" && !sub.value && !reader.value && !epList.value && !menuOpen.value && !displayOpen.value);
+const showSiteHost = computed(() => siteOpen.value && tab.value === "home" && !sub.value && !reader.value && !epList.value);
+/** タブの画面(ホーム/お気に入り等)を出す状態 */
+const showTabs = computed(() => !sub.value && !reader.value && !epList.value && !showSiteHost.value);
+const tabComponent = computed(() => ({ home: HomeScreen, bookmarks: BookmarksScreen, history: HistoryScreen, notifications: NotificationsScreen })[tab.value]);
 const starEnabled = computed(() => showSiteHost.value && star.value.kind !== null);
 
 let curUrl = "";
@@ -97,12 +110,17 @@ function showBars(animate = true) {
 function onWindowScroll() {
   if (siteVisible.value || showSiteHost.value) return; // サイト表示中はネイティブ側のスクロールで判定
   const y = Math.max(0, window.scrollY);
+  if (performance.now() < noHideUntil) {
+    lastY = y; // 復元のためのスクロールではバーを隠さない
+    return;
+  }
   const dy = y - lastY;
   lastY = y;
   const r = ctl.feed(dy, y, performance.now());
   if (r !== null) setHidden(r);
 }
 let lastY = 0;
+let noHideUntil = 0;
 function scrollTop() {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -121,16 +139,7 @@ watch(siteVisible, async (v) => {
   }
 });
 watch([topH, bottomH], () => applyInsets(false));
-watch(tab, () => {
-  showBars(false);
-  lastY = 0;
-  window.scrollTo(0, 0);
-});
-watch(sub, () => {
-  showBars(false);
-  lastY = 0;
-  window.scrollTo(0, 0);
-});
+// 画面遷移時のスクロール位置は、ナビゲーション関数(go / popRoute)側で設定する
 
 // ---------------------------------------------------------------- SiteView
 
@@ -202,8 +211,16 @@ async function onPageFinished(url: string, title: string) {
 async function openUrl(url: string) {
   menuOpen.value = false;
   displayOpen.value = false;
-  sub.value = null;
-  tab.value = "home";
+  const onSite = tab.value === "home" && siteOpen.value && !sub.value && !reader.value && !epList.value;
+  if (!onSite) {
+    // 今いた画面(お気に入り・履歴・リーダー等)を積んでからサイトへ。戻るとそこへ戻る
+    go(() => {
+      sub.value = null;
+      reader.value = null;
+      epList.value = null;
+      tab.value = "home";
+    });
+  }
   showBars(false);
   try {
     if (siteOpen.value) {
@@ -265,16 +282,132 @@ async function onStar() {
 
 // ---------------------------------------------------------------- navigation
 
+/**
+ * ナビゲーションスタック。画面(タブ + サブ画面 + リーダー)を移動する前に、今いた画面とスクロール位置を積み、
+ * 戻る操作で 1 つ前の画面へ(スクロール位置も)復元する。サイト表示はホームタブ上の状態(siteOpen)で、
+ * サイト内の戻りは SiteView 側の履歴、サイトを閉じたあとは このスタックで元の画面に戻る。
+ */
+interface Route {
+  tab: Tab;
+  sub: Sub;
+  reader: ReaderTarget | null;
+  epList: ReaderTarget | null;
+  scrollY: number;
+}
+const MAX_STACK = 50;
+const routeStack: Route[] = [];
+
+function snapshot(): Route {
+  return { tab: tab.value, sub: sub.value, reader: reader.value ? { ...reader.value } : null, epList: epList.value ? { ...epList.value } : null, scrollY: Math.max(0, window.scrollY) };
+}
+
+/** スクロール位置の復元。一覧は非同期で読み込まれるため、高さが足りるまで少し待って再試行する。 */
+let restoreTimer: ReturnType<typeof setTimeout> | undefined;
+function restoreScroll(y: number) {
+  clearTimeout(restoreTimer);
+  lastY = y;
+  noHideUntil = performance.now() + 300;
+  if (y <= 0) {
+    window.scrollTo(0, 0);
+    return;
+  }
+  let tries = 0;
+  const step = () => {
+    noHideUntil = performance.now() + 300;
+    window.scrollTo(0, y);
+    const reached = Math.abs(window.scrollY - y) < 2;
+    if (!reached && ++tries < 80 && alive) restoreTimer = setTimeout(step, 50);
+  };
+  void nextTick(step);
+}
+
+/** 画面を変更する。変更前の画面をスタックへ積む。 */
+function go(change: () => void) {
+  routeStack.push(snapshot());
+  if (routeStack.length > MAX_STACK) routeStack.shift();
+  change();
+  showBars(false);
+  restoreScroll(0);
+}
+
+/** 1 つ前の画面へ戻る。戻れる履歴がなければ false。 */
+function popRoute(): boolean {
+  const r = routeStack.pop();
+  if (!r) return false;
+  readerRestoreY.value = r.reader ? r.scrollY : 0;
+  tab.value = r.tab;
+  sub.value = r.sub;
+  reader.value = r.reader;
+  epList.value = r.epList;
+  showBars(false);
+  restoreScroll(r.scrollY);
+  return true;
+}
+
 function onTab(t: Tab) {
-  const hadSub = sub.value !== null;
-  sub.value = null;
-  if (t === "home" && tab.value === "home" && !hadSub && siteOpen.value) void closeSite(); // ホーム再タップ: サイトを閉じる
-  else tab.value = t;
+  menuOpen.value = false;
+  if (t === "home" && tab.value === "home" && !sub.value && !reader.value && !epList.value && siteOpen.value) {
+    void closeSite(); // ホーム再タップ: サイトを閉じる
+    return;
+  }
+  if (t === tab.value && !sub.value && !reader.value && !epList.value) return;
+  go(() => {
+    sub.value = null;
+    reader.value = null;
+    epList.value = null;
+    tab.value = t;
+  });
 }
 
 function openSub(s: Exclude<Sub, null>) {
   menuOpen.value = false;
-  sub.value = s;
+  go(() => {
+    reader.value = null;
+    epList.value = null;
+    sub.value = s;
+  });
+}
+
+/** バックアップの閲覧は お気に入り → エピソード一覧 → リーダー の順にスタックへ積む */
+function openEpisodeList(target: ReaderTarget) {
+  go(() => {
+    sub.value = null;
+    reader.value = null;
+    epList.value = { ...target, episodeKey: undefined, resume: undefined };
+  });
+}
+/** 作品選択からの「続きから読む」: 一覧を挟んで(戻ると一覧へ)リーダーを開く */
+function resumeReader(target: ReaderTarget) {
+  openEpisodeList(target);
+  openReader({ ...target, resume: true });
+}
+/** 話を指定してリーダーを開く(話の指定がなければ resume の指定に従う) */
+function openReader(target: ReaderTarget) {
+  go(() => {
+    sub.value = null;
+    readerRestoreY.value = 0;
+    epList.value = null;
+    reader.value = { ...target };
+  });
+}
+function openEpisode(key: string) {
+  if (epList.value) openReader({ ...epList.value, episodeKey: key, resume: false });
+}
+/** リーダーのメニューから一覧へ。直前の画面が同じ作品の一覧なら戻る */
+function toEpisodeList() {
+  menuOpen.value = false;
+  if (!reader.value) return;
+  const prev = routeStack[routeStack.length - 1];
+  const r = reader.value;
+  if (prev?.epList && prev.epList.site === r.site && prev.epList.novelKey === r.novelKey) {
+    popRoute();
+    return;
+  }
+  openEpisodeList({ ...r, episodeKey: undefined });
+}
+/** リーダーで話が変わったとき、現在の履歴項目に反映する(戻ったときに同じ話を開く)。スタックは増やさない。 */
+function onReaderEpisode(key: string) {
+  if (reader.value) reader.value = { ...reader.value, episodeKey: key };
 }
 async function doLogout() {
   if (!(await confirmNative("ログアウトしますか?", "ログアウト", "ログアウト"))) return;
@@ -285,18 +418,24 @@ async function doLogout() {
 /** Android 戻るボタン: メニュー/シート → サブ画面 → サイト内で戻る → サイトを閉じる → ホームへ → 終了 */
 async function onBack() {
   if (closeTopOverlay()) return;
-  if (sub.value) {
-    sub.value = null;
-    return;
-  }
-  if (tab.value === "home" && siteOpen.value) {
+  if (tab.value === "home" && siteOpen.value && !sub.value && !reader.value && !epList.value) {
     let went = false;
     try {
       went = (await SiteView.goBack()).wentBack;
     } catch {
       /* 閉じる */
     }
-    if (!went) await closeSite();
+    if (!went) {
+      await closeSite();
+      popRoute(); // サイトを開く前にいた画面(お気に入り等)へ。履歴がなければホームのまま
+    }
+    return;
+  }
+  if (popRoute()) return;
+  if (sub.value || reader.value || epList.value) {
+    sub.value = null;
+    reader.value = null;
+    epList.value = null;
     return;
   }
   if (tab.value !== "home") {
@@ -342,8 +481,14 @@ onMounted(async () => {
     await SiteView.addListener("externalLink", (e) => void onExternalLink(e.url)),
     await CapApp.addListener("backButton", () => void onBack()),
   );
-  offReconnect = onReconnect(() => void flushHistory(cfg()));
+  offReconnect = onReconnect(() => {
+    void flushHistory(cfg());
+    void syncNotifications(cfg());
+    flushReadPending(cfg()).catch(() => {});
+  });
+  flushReadPending(cfg()).catch(() => {});
   void flushHistory(cfg());
+  void syncNotifications(cfg());
 });
 onUnmounted(() => {
   alive = false;
@@ -357,23 +502,65 @@ onUnmounted(() => {
 
 <template>
   <div class="shell">
-    <TopBar :username="settings.username" :hidden="hidden" @menu="menuOpen = true" @display="displayOpen = true" @theme="toggleTheme" @brand="scrollTop" />
+    <TopBar
+      :username="settings.username"
+      :hidden="hidden"
+      :reader="!!reader && !sub"
+      @menu="menuOpen = true"
+      @display="displayOpen = true"
+      @theme="toggleTheme"
+      @brand="scrollTop"
+      @back="onBack"
+      @reader-menu="readerRef?.openMenu()"
+    />
 
-    <main v-if="sub" class="screen">
-      <div class="subhead">
-        <button class="icon-btn" aria-label="戻る" @click="sub = null"><Icon name="back" /></button>
-        <h1>{{ sub === "settings" ? "設定" : "ユーザー管理" }}</h1>
-      </div>
-      <SettingsView v-if="sub === 'settings'" :settings="settings" @logout="doLogout" @unauthorized="emit('unauthorized')" />
-      <UsersView v-else-if="isAdmin" :settings="settings" @unauthorized="emit('unauthorized')" />
-    </main>
     <!-- サイト表示中: この背後(上下バーの間)にネイティブ WebView が重なる -->
-    <div v-else-if="showSiteHost" class="site-host" />
-    <main v-else class="screen">
-      <HomeScreen v-if="tab === 'home'" :settings="settings" @open="openUrl" @unauthorized="emit('unauthorized')" />
-      <BookmarksScreen v-else-if="tab === 'bookmarks'" :settings="settings" @open="openUrl" @unauthorized="emit('unauthorized')" />
-      <HistoryScreen v-else-if="tab === 'history'" :settings="settings" @open="openUrl" @unauthorized="emit('unauthorized')" />
-      <NotificationsScreen v-else />
+    <div v-if="showSiteHost" class="site-host" />
+    <main v-show="!showSiteHost" class="screen">
+      <template v-if="sub">
+        <div class="subhead">
+          <button class="icon-btn" aria-label="戻る" @click="onBack"><Icon name="back" /></button>
+          <h1>{{ sub === "settings" ? "設定" : "ユーザー管理" }}</h1>
+        </div>
+        <SettingsView v-if="sub === 'settings'" :settings="settings" @logout="doLogout" @unauthorized="emit('unauthorized')" />
+        <UsersView v-else-if="isAdmin" :settings="settings" @unauthorized="emit('unauthorized')" />
+      </template>
+      <EpisodeListScreen
+        v-else-if="epList"
+        :key="epList.site + ':' + epList.novelKey"
+        :settings="settings"
+        :site="epList.site"
+        :novel-key="epList.novelKey"
+        :novel-title="epList.title"
+        :author="epList.author"
+        :prefer-offline="epList.preferOffline"
+        :backup-at="epList.backupAt"
+        :current-key="epList.episodeKey"
+        @back="onBack"
+        @open="openEpisode"
+        @unauthorized="emit('unauthorized')"
+      />
+      <ReaderScreen
+        v-else-if="reader"
+        :key="reader.site + ':' + reader.novelKey"
+        ref="readerRef"
+        :settings="settings"
+        :display="display"
+        :site="reader.site"
+        :novel-key="reader.novelKey"
+        :novel-title="reader.title"
+        :prefer-offline="reader.preferOffline"
+        :backup-at="reader.backupAt"
+        :initial-episode-key="reader.episodeKey"
+        :resume="reader.resume"
+        @episode-list="toEpisodeList"
+        @episode="onReaderEpisode"
+        @unauthorized="emit('unauthorized')"
+      />
+      <!-- お気に入りだけ KeepAlive で保持(戻ったとき一覧・検索語・位置がそのまま残る) -->
+      <KeepAlive include="BookmarksScreen">
+        <component :is="tabComponent" v-if="showTabs" :settings="settings" @open="openUrl" @read="openEpisodeList" @resume="resumeReader" @unauthorized="emit('unauthorized')" />
+      </KeepAlive>
     </main>
 
     <BottomBar

@@ -1,13 +1,13 @@
 import request from "supertest";
 import { describe, expect, it } from "vitest";
-import { client, login, makeAdmin, makeViewer, setupApp } from "./helpers.js";
+import { client, login, makeAdmin, makeViewer, setupApp, SETUP_TOKEN } from "./helpers.js";
 
 describe("auth (bearer only)", () => {
   it("setup returns a token; status reflects it; second setup is 409", async () => {
     const { app, db } = setupApp();
-    expect((await request(app).get("/api/auth/status")).body).toEqual({ setupRequired: true, user: null });
+    expect((await request(app).get("/api/auth/status")).body).toEqual({ setupRequired: true, setupEnabled: true, user: null });
 
-    const s = await request(app).post("/api/auth/setup").send({ username: "admin", password: "password123", token: true });
+    const s = await request(app).post("/api/auth/setup").send({ username: "admin", password: "password123", token: true, setupToken: SETUP_TOKEN });
     expect(s.status).toBe(201);
     expect(s.body.token).toBeTruthy();
     expect(s.body.user).toMatchObject({ username: "admin", role: "admin" });
@@ -22,13 +22,13 @@ describe("auth (bearer only)", () => {
     const row = db.prepare("SELECT id_hash FROM sessions").get() as unknown as { id_hash: string };
     expect(row.id_hash).not.toBe(s.body.token);
 
-    const again = await request(app).post("/api/auth/setup").send({ username: "other1", password: "password123" });
+    const again = await request(app).post("/api/auth/setup").send({ username: "other1", password: "password123", setupToken: SETUP_TOKEN });
     expect(again.status).toBe(409);
   });
 
   it("setup validates input", async () => {
     const { app } = setupApp();
-    const r = await request(app).post("/api/auth/setup").send({ username: "a", password: "short" });
+    const r = await request(app).post("/api/auth/setup").send({ username: "a", password: "short", setupToken: SETUP_TOKEN });
     expect(r.status).toBe(400);
     expect(r.body.error).toBe("validation_error");
   });

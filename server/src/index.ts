@@ -1,8 +1,12 @@
 import path from "node:path";
-import { createApp } from "./app.js";
+import { createApp, type AppContext } from "./app.js";
 import { loadConfig } from "./config.js";
 import { cleanupExpiredSessions } from "./auth/session.js";
 import { openDb } from "./db/index.js";
+import { initBackupSystem, shutdownBackupSystem, presets } from "./backup/index.js";
+import { readBackupScheduleSettings } from "./backup/settings.js";
+
+export type { AppContext };
 
 const config = loadConfig();
 const db = openDb(path.join(config.dataDir, "novel-backup.db"));
@@ -11,11 +15,45 @@ const db = openDb(path.join(config.dataDir, "novel-backup.db"));
 cleanupExpiredSessions(db);
 setInterval(() => cleanupExpiredSessions(db), 60 * 60 * 1000).unref();
 
-const app = createApp({ db });
-const server = app.listen(config.port, () => console.log(`novel-backup server: http://localhost:${config.port}`));
+const presetByFrequency = {
+  hourly: presets.hourlySafe,
+  daily: presets.standard,
+  weekly: presets.light,
+} as const;
+
+const backupPreset = presetByFrequency[config.backupFrequency];
+const persistedSchedule = readBackupScheduleSettings(db, {
+  frequency: config.backupFrequency,
+  time: config.backupTime,
+  maxParallel: config.backupMaxParallel,
+});
+const app = createApp({ db, apkDir: path.join(config.dataDir, "apk"), setupToken: config.setupToken });
+const server = app.listen(config.port, config.host, () => {
+  console.log(`novel-backup server: http://${config.host}:${config.port}`);
+  if (!config.setupToken && (db.prepare("SELECT COUNT(*) AS c FROM users").get() as unknown as { c: number }).c === 0) {
+    console.warn("[Boot] SETUP_TOKEN が未設定のため、初回管理者の作成(/api/auth/setup)は無効です");
+  }
+  // ポート確保に成功してから起動する（二重起動時に稼働中プロセスのタスクを巻き戻さないため）
+  initBackupSystem(db, {
+    ...backupPreset,
+    frequency: persistedSchedule.frequency,
+    maxParallel: persistedSchedule.maxParallel,
+    pythonBin: config.backupPythonBin,
+    time: persistedSchedule.time,
+  });
+  console.log("[Boot] Backup system initialized");
+});
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`[Boot] ポート ${config.port} は使用中です。既に起動しているサーバーを停止してから再実行してください。`);
+    process.exit(1);
+  }
+  throw err;
+});
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => {
+    shutdownBackupSystem();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 2000).unref();
   });

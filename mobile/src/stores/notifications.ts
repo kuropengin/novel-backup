@@ -1,5 +1,6 @@
 import { computed, ref } from "vue";
 import { Preferences } from "@capacitor/preferences";
+import { deleteNotification as deleteNotificationApi, listNotifications, markNotificationAsRead, type ApiConfig } from "../api";
 import {
   addNotification,
   markAllRead as markAll,
@@ -34,25 +35,56 @@ export async function loadNotifications() {
 }
 
 let seq = 0;
-/** お知らせを追加する。端末保存完了・バックアップ完了などの発生源から呼ぶ(今回は発生源なし)。 */
 export function notify(input: NotifyInput): void {
   const id = `${Date.now().toString(36)}-${(seq++).toString(36)}`;
   notifications.value = addNotification(notifications.value, input, id);
   void persist();
 }
-export function markRead(id: string) {
+
+export async function syncNotifications(cfg: ApiConfig): Promise<void> {
+  const remote = await listNotifications(cfg);
+  const locals = notifications.value.filter((n) => n.serverId === undefined);
+  const serverMapped: AppNotification[] = remote.notifications.map((n) => ({
+    id: `server:${n.id}`,
+    serverId: n.id,
+    kind: n.type,
+    title: n.title,
+    body: n.message ?? "",
+    createdAt: n.createdAt,
+    read: n.read,
+  }));
+  notifications.value = [...serverMapped, ...locals].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  void persist();
+}
+
+export async function markRead(id: string, cfg?: ApiConfig): Promise<void> {
   notifications.value = markOne(notifications.value, id);
+  const n = notifications.value.find((x) => x.id === id);
+  if (n?.serverId !== undefined && cfg) {
+    await markNotificationAsRead(cfg, n.serverId);
+  }
   void persist();
 }
-export function markAllRead() {
+
+export async function markAllRead(cfg?: ApiConfig): Promise<void> {
   notifications.value = markAll(notifications.value);
+  if (cfg) {
+    const jobs = notifications.value
+      .filter((n) => n.serverId !== undefined)
+      .map((n) => markNotificationAsRead(cfg, n.serverId!));
+    await Promise.all(jobs);
+  }
   void persist();
 }
-export function dismiss(id: string) {
+
+export async function dismiss(id: string, cfg?: ApiConfig): Promise<void> {
+  const target = notifications.value.find((n) => n.id === id);
   notifications.value = removeNotification(notifications.value, id);
+  if (target?.serverId !== undefined && cfg) await deleteNotificationApi(cfg, target.serverId);
   void persist();
 }
-export function clearNotifications() {
-  notifications.value = [];
+
+export function clearLocalNotifications() {
+  notifications.value = notifications.value.filter((n) => n.serverId !== undefined);
   void persist();
 }

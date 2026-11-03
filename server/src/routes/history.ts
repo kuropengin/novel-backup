@@ -106,10 +106,13 @@ export function historyRouter(db: Db): Router {
     const like = q ? `%${escapeLike(q)}%` : null;
 
     if (view === "episode") {
+      // エピソード毎は話の閲覧のみ。作品ページだけの閲覧は「作品毎」で表示する
       const where = like ? "AND (novel_title LIKE ? ESCAPE '!' OR episode_title LIKE ? ESCAPE '!')" : "";
       const params = like ? [userId, like, like, limit, offset] : [userId, limit, offset];
       const rows = db
-        .prepare(`SELECT * FROM history WHERE user_id = ? ${where} ORDER BY viewed_at DESC, id DESC LIMIT ? OFFSET ?`)
+        .prepare(
+          `SELECT * FROM history WHERE user_id = ? AND episode_key <> '' ${where} ORDER BY viewed_at DESC, id DESC LIMIT ? OFFSET ?`,
+        )
         .all(...params) as unknown as HistoryRow[];
       return void res.json({ view, history: rows.map(toEpisodeDto) });
     }

@@ -1,6 +1,6 @@
 # 01. サーバー
 
-Node.js >= 22.13 / TypeScript / Express 4 / `node:sqlite` / zod / bcryptjs。API 専用(静的配信・SPA fallback なし。未定義のパスは `404 {"error":"not_found"}`)。
+Node.js >= 26 / TypeScript / Express 5 / `node:sqlite` / zod / bcryptjs。API 専用(静的配信・SPA fallback なし。未定義のパスは `404 {"error":"not_found"}`)。
 
 ```
 server/src/
@@ -18,14 +18,17 @@ server/src/
 
 | 変数 | 既定 | 内容 |
 |---|---|---|
-| `PORT` | `3000` | 待ち受けポート(全インターフェース) |
+| `HOST` | `127.0.0.1` | 待ち受けアドレス(同一マシンのリバースプロキシ前提。[05_deployment.md](05_deployment.md)) |
+| `PORT` | `3000` | 待ち受けポート |
+| `SETUP_TOKEN` | なし | 初回管理者作成に必要。未設定だと `/api/auth/setup` は `403 setup_disabled` |
 | `DATA_DIR` | `<repo>/data` | DB 置き場。`novel-backup.db` を作成 |
 
 ## 認証
 
 - `Authorization: Bearer <token>` のみ。トークンは `sessions` テーブルに SHA-256 ハッシュで保存、有効期限 90 日。
 - Cookie は読まない・設定しない。CSRF 対策は不要(ブラウザが自動付与する資格情報がない)。
-- `POST /api/auth/token` は IP 毎に 10 回/分のレート制限。
+- `POST /api/auth/token` は IP 毎に 10 回/分 + ユーザー名毎の失敗ロックアウト(5 回で 1 分、倍々で上限 15 分)。`/setup`・`/password` にもレート制限。詳細は [05_deployment.md](05_deployment.md)。
+- 500 は常に `{ "error": "internal_error" }`(詳細はサーバーログのみ)。
 
 エラー形式: `{ "error": "<code>", "message"?: string }`。入力不正は `400 validation_error`(`details` に zod issues)。
 
@@ -36,9 +39,9 @@ server/src/
 | メソッド/パス | 認証 | 内容 |
 |---|---|---|
 | `GET /api/health` | 不要 | `{ ok, name, version }` |
-| `GET /api/auth/status` | 不要 | `{ setupRequired, user }`。`user` はトークンが有効なときのみ(`{id, username, role}`)、無効/なしは `null` |
-| `POST /api/auth/setup` | 不要 | ユーザーが 0 人のときのみ。`{ username, password }` で最初の admin を作成し **`201 { token, expiresAt, user }`**。既にユーザーがいれば `409 already_setup`。(body の `token: true` は受け付けるが、常にトークンを返す) |
-| `POST /api/auth/token` | 不要 | `{ username, password }` → `{ token, expiresAt, user }`。失敗 `401 invalid_credentials`、超過 `429 too_many_requests` |
+| `GET /api/auth/status` | 不要 | `{ setupRequired, setupEnabled, user }`(`setupEnabled` はサーバーに `SETUP_TOKEN` があるか)。`user` はトークンが有効なときのみ(`{id, username, role}`)、無効/なしは `null` |
+| `POST /api/auth/setup` | 不要 | ユーザーが 0 人のときのみ。`{ username, password, setupToken }`(`setupToken` は環境変数 `SETUP_TOKEN` と一致が必要)で最初の admin を作成し **`201 { token, expiresAt, user }`**。既にユーザーがいれば `409 already_setup`、`SETUP_TOKEN` 未設定は `403 setup_disabled`、トークン不一致/欠落は `403 invalid_setup_token`、超過は `429`。(body の `token: true` は受け付けるが、常にトークンを返す) |
+| `POST /api/auth/token` | 不要 | `{ username, password }` → `{ token, expiresAt, user }`。失敗 `401 invalid_credentials`、超過・ロックアウト中は `429 { error: "too_many_requests", retryAfter }`(`Retry-After` ヘッダ付き) |
 | `POST /api/auth/logout` | 必要 | 使用中のトークンを失効 |
 | `POST /api/auth/password` | 必要 | `{ currentPassword, newPassword }`。現在のトークンは維持し、同ユーザーの他トークンは失効。現パスワード不一致は `401 invalid_credentials` |
 

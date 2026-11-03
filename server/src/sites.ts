@@ -75,3 +75,16 @@ export function resolveUrl(input: string): ResolvedUrl | null {
   }
   return null;
 }
+
+const NOVEL_KEY_PATTERNS: Record<SiteId, RegExp> = {
+  narou: /^n\d{4}[a-z]{1,2}$/i,
+  hameln: /^\d{1,10}$/,
+  kakuyomu: /^\d{1,25}$/,
+};
+
+/** サイトごとの作品キー形式を厳密に検証する。正規化(narou は小文字)したキーを返し、不正なら null。 */
+export function normalizeNovelKey(site: SiteId, key: string): string | null {
+  const k = key.trim();
+  if (!NOVEL_KEY_PATTERNS[site].test(k)) return null;
+  return site === "narou" ? k.toLowerCase() : k;
+}

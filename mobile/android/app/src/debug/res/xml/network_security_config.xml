@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- デバッグビルド専用: LAN IP(192.168.x.x 等)での開発確認のため平文 HTTP を許可。main の同名リソースを上書きする。 -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

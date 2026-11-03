@@ -10,21 +10,22 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@capacitor/android": "^7.0.0",
-    "@capacitor/app": "^7.1.2",
-    "@capacitor/core": "^7.0.0",
-    "@capacitor/dialog": "^7.0.4",
-    "@capacitor/network": "^7.0.4",
-    "@capacitor/preferences": "^7.0.0",
-    "@capacitor/status-bar": "^7.0.6",
-    "vue": "^3.5.13"
+    "@aparajita/capacitor-secure-storage": "^8.0.1",
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/core": "^8.6.0",
+    "@capacitor/dialog": "^8.0.1",
+    "@capacitor/network": "^8.0.1",
+    "@capacitor/preferences": "^8.0.1",
+    "@capacitor/status-bar": "^8.0.4",
+    "vue": "^3.5.44"
   },
   "devDependencies": {
-    "@capacitor/cli": "^7.0.0",
-    "@vitejs/plugin-vue": "^5.2.1",
-    "typescript": "~5.9.3",
-    "vite": "^6.0.0",
-    "vitest": "^5.0.5",
-    "vue-tsc": "^3.3.13"
+    "@capacitor/cli": "^8.6.0",
+    "@vitejs/plugin-vue": "^6.0.10",
+    "typescript": "~6.0.3",
+    "vite": "^8.3.5",
+    "vitest": "^5.1.0",
+    "vue-tsc": "^3.3.14"
   }
 }
