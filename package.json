@@ -13,10 +13,10 @@
     "dev": "npm run dev -w server",
     "build": "npm run build -w server && npm run build -w mobile",
     "start": "npm run start -w server",
-    "typecheck": "npm run typecheck -w server && npm run typecheck -w mobile",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w mobile && tsc --noEmit -p mobile/tsconfig.scripts.json",
     "test": "npm run test -w server && npm run test -w mobile",
     "mobile:sync": "npm run build -w mobile && npm exec -w mobile -- cap sync android",
-    "mobile:apk": "node mobile/scripts/apk.mjs"
+    "mobile:apk": "node mobile/scripts/apk.ts"
   },
   "devDependencies": {
     "typescript": "~6.0.3"

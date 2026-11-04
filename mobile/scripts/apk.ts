@@ -1,6 +1,6 @@
 // Windows / macOS / Linux 共通で android/gradlew assembleDebug を実行する。JDK 21 と Android SDK が必要。
 // JAVA_HOME が未設定、または JDK 22 以上を指す場合は %USERPROFILE%\.jdks から JDK 21 を自動検出して使う。
-// ANDROID_HOME が未設定なら %LOCALAPPDATA%\Android\Sdk を使う。
+// ANDROID_HOME が未設定なら %LOCALAPPDATA%\Android\Sdk を使う。// Node 26 の型除去で直接実行する(node mobile/scripts/apk.ts)ため、erasable な構文のみ使う。
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -9,10 +9,10 @@ import { fileURLToPath } from "node:url";
 
 const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "android");
 const win = process.platform === "win32";
-const env = { ...process.env };
+const env: NodeJS.ProcessEnv = { ...process.env };
 
 /** JDK ディレクトリのメジャーバージョン(release ファイルの JAVA_VERSION、無ければディレクトリ名から)。不明なら null */
-function jdkMajor(home) {
+function jdkMajor(home: string): number | null {
   try {
     const rel = fs.readFileSync(path.join(home, "release"), "utf8");
     const m = /JAVA_VERSION="?(\d+)(?:\.(\d+))?/.exec(rel);
@@ -24,9 +24,9 @@ function jdkMajor(home) {
   return m ? Number(m[1]) : null;
 }
 
-function findJdk21() {
+function findJdk21(): string | null {
   const root = path.join(os.homedir(), ".jdks");
-  let names = [];
+  let names: string[] = [];
   try {
     names = fs.readdirSync(root);
   } catch {

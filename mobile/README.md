@@ -16,7 +16,7 @@
 ```bash
 npm install
 npm run mobile:sync   # mobile をビルドし cap sync android で android/ へ反映
-npm run mobile:apk    # gradlew assembleDebug
+npm run mobile:apk    # gradlew assembleDebug(mobile/scripts/apk.ts を Node の型除去機能で直接実行)
 ```
 
 `npm run mobile:apk` は JAVA_HOME が未設定または JDK 22 以上の場合 `%USERPROFILE%\.jdks` の JDK 21 を、ANDROID_HOME が未設定なら `%LOCALAPPDATA%\Android\Sdk` を自動で使います(使用 JDK を表示)。
