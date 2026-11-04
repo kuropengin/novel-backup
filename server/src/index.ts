@@ -35,7 +35,9 @@ const app = createApp({
   trustProxy: config.trustProxy,
 });
 let pythonUpdater: PythonUpdater | null = null;
-const server = app.listen(config.port, config.host, async () => {
+const server = app.listen(config.port, config.host, async (err?: Error) => {
+  // Express 5 は listen 失敗時もこのコールバックを呼ぶ。失敗の処理は server.on("error") に任せる
+  if (err) return;
   console.log(`novel-backup server: http://${config.host}:${config.port}`);
   if (!config.setupToken && (db.prepare("SELECT COUNT(*) AS c FROM users").get() as unknown as { c: number }).c === 0) {
     console.warn("[Boot] SETUP_TOKEN が未設定のため、初回管理者の作成(/api/auth/setup)は無効です");
