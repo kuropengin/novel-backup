@@ -34,7 +34,9 @@ nginx の conf を追加して `docker compose -f ~/docker/proxy/docker-compose.
 
 アプリでサーバー URL に `https://<ドメイン>` を入力し、初期設定画面で `SETUP_TOKEN` の値を入れて管理者を作る。作成後は `.env` の `SETUP_TOKEN` を空にして `docker compose up -d` してよい。
 
-## nginx(`~/docker/proxy/config/conf.d/novel.conf`)
+## nginx(`~/docker/proxy/config/conf.d/novel-backup.conf`)
+
+サンプルは [deploy/nginx/novel-backup.conf](../deploy/nginx/novel-backup.conf)。ドメインを置き換えてコピーする。
 
 ```nginx
 server {
