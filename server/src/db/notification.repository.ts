@@ -37,6 +37,28 @@ export class NotificationRepository {
   }
 
   /**
+   * 作品の更新通知を、その作品をブックマークしている全ユーザーに 1 件ずつ作成する。
+   * 作成した通知数を返す。新着 / 改稿がともに 0 なら何もしない。
+   */
+  notifyNovelUpdate(site: string, novelKey: string, newCount: number, revisedCount: number): number {
+    if (newCount <= 0 && revisedCount <= 0) return 0;
+    const novel = this.db
+      .prepare(`SELECT id, title FROM novels WHERE site = ? AND novel_key = ?`)
+      .get(site, novelKey) as { id: number; title: string } | undefined;
+    if (!novel) return 0;
+    const users = this.db
+      .prepare(`SELECT DISTINCT user_id FROM bookmarks WHERE novel_id = ?`)
+      .all(novel.id) as Array<{ user_id: number }>;
+    const parts: string[] = [];
+    if (newCount > 0) parts.push(`新着 ${newCount}話`);
+    if (revisedCount > 0) parts.push(`改稿 ${revisedCount}話`);
+    const title = `${novel.title || novelKey} が更新されました`;
+    const message = parts.join("・");
+    for (const u of users) this.createNotification(u.user_id, "backup", title, message, novelKey);
+    return users.length;
+  }
+
+  /**
    * ユーザーの通知一覧を取得
    */
   listNotifications(userId: number, limit: number = 50): Notification[] {

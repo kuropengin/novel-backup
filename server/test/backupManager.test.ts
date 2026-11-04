@@ -3,7 +3,7 @@ import { BackupManager } from "../src/backup/manager.js";
 import { BackupScheduler } from "../src/backup/scheduler.js";
 import { BaseScraper } from "../src/backup/scrapers.js";
 import type { BackupConfig, Episode, EpisodeContent, NovelMetadata, SiteId } from "../src/backup/types.js";
-
+import { NotificationRepository } from "../src/db/notification.repository.js";
 import { nowIso, openDb, type Db } from "../src/db/index.js";
 
 const CONFIG: BackupConfig = {
@@ -65,10 +65,10 @@ function setup(novels: string[]) {
     const novel = db.prepare(`SELECT id FROM novels WHERE site = 'narou' AND novel_key = ?`).get(novelKey) as { id: number };
     db.prepare(`INSERT INTO bookmarks (user_id, novel_id, created_at) VALUES (?, ?, ?)`).run(userId, novel.id, nowIso());
   };
-
+  const notes = (userId: number) => new NotificationRepository(db).listNotifications(userId);
   const taskStatus = (novelKey: string) =>
     (db.prepare(`SELECT status FROM backup_tasks WHERE novel_key = ?`).get(novelKey) as { status: string } | undefined)?.status;
-  return { db, scraper, manager, scheduler, user, bookmark, taskStatus };
+  return { db, scraper, manager, scheduler, user, bookmark, notes, taskStatus };
 }
 
 describe("single-novel backup", () => {
@@ -109,5 +109,79 @@ describe("single-novel backup", () => {
     await manager.runBackupCycle(); // 実行中なので保留される
     await vi.waitFor(() => expect(scraper.listCalls.filter((k) => k === "b").length).toBe(1), { timeout: 5000 });
     await vi.waitFor(() => expect(manager.isBusy()).toBe(false), { timeout: 5000 });
+  });
+});
+
+describe("update notifications", () => {
+  it("first backup sends nothing; new episodes notify only bookmarking users; revisions counted; no change is silent", async () => {
+    const { manager, scraper, user, bookmark, notes } = setup(["a"]);
+    const u1 = user("u1");
+    const u2 = user("u2");
+    const u3 = user("u3");
+    bookmark(u1, "a");
+    bookmark(u2, "a");
+
+    // 初回バックアップ(全話が新規でも通知しない)
+    await manager.runNovelBackup("narou", "a");
+    expect(notes(u1)).toHaveLength(0);
+
+    // 変更なしの再実行
+    await manager.runNovelBackup("narou", "a");
+    expect(notes(u1)).toHaveLength(0);
+
+    // 新着 1 話
+    scraper.episodes.set("a", ["1", "2", "3"]);
+    await manager.runNovelBackup("narou", "a");
+    for (const u of [u1, u2]) {
+      const n = notes(u);
+      expect(n).toHaveLength(1);
+      expect(n[0]).toMatchObject({ type: "backup", title: "作品a が更新されました", message: "新着 1話", novelKey: "a" });
+    }
+    expect(notes(u3)).toHaveLength(0);
+
+    // 変更なし
+    await manager.runNovelBackup("narou", "a");
+    expect(notes(u1)).toHaveLength(1);
+
+    // 改稿 1 話(本文変更 + 更新日時変更)
+    scraper.bodies.set("a/2", "<p>revised</p>");
+    scraper.updatedAt.set("a/2", "2026-10-05T00:00:00Z");
+    await manager.runNovelBackup("narou", "a");
+    expect(notes(u1)).toHaveLength(2);
+    expect(notes(u1)[0].message).toBe("改稿 1話");
+
+    // 新着 + 改稿の合算(1 通知)
+    scraper.episodes.set("a", ["1", "2", "3", "4"]);
+    scraper.bodies.set("a/1", "<p>revised1</p>");
+    scraper.updatedAt.set("a/1", "2026-10-06T00:00:00Z");
+    await manager.runNovelBackup("narou", "a");
+    expect(notes(u1)).toHaveLength(3);
+    expect(notes(u1)[0].message).toBe("新着 1話・改稿 1話");
+  });
+
+  it("re-fetching an episode whose stored body was empty is not a revision", async () => {
+    const { manager, scraper, db, user, bookmark, notes } = setup(["a"]);
+    const u1 = user("u1");
+    bookmark(u1, "a");
+    await manager.runNovelBackup("narou", "a");
+    // 過去に空本文で保存された状態を再現
+    db.prepare(`UPDATE episode_versions SET body_html = ''`).run();
+    scraper.updatedAt.set("a/1", "2026-10-07T00:00:00Z");
+    await manager.runNovelBackup("narou", "a");
+    expect(notes(u1)).toHaveLength(0);
+  });
+
+  it("does not notify on failure (including full-cycle completion)", async () => {
+    const { manager, scraper, user, bookmark, notes, db } = setup(["a"]);
+    const admin = Number(db.prepare(`INSERT INTO users (username, password_hash, role, created_at) VALUES ('adm','x','admin',?)`).run(nowIso()).lastInsertRowid);
+    const u1 = user("u1");
+    bookmark(u1, "a");
+    scraper.scrapeEpisodeList = async () => {
+      throw new Error("boom");
+    };
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await manager.runBackupCycle();
+    expect(notes(u1)).toHaveLength(0);
+    expect(notes(admin)).toHaveLength(0);
   });
 });

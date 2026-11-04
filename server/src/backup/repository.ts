@@ -244,14 +244,30 @@ export class BackupRepository {
     });
   }
 
-  saveEpisodes(site: SiteId, novelKey: string, episodes: Episode[]): number {
+  /**
+   * 話一覧を保存する。
+   * newKeys: 今回初めて保存された話キー。hadPreviousBackup: この作品が以前に話一覧のバックアップを完了済みか
+   * (初回バックアップでは全話が新規扱いになるため、更新通知の判定に使う)。
+   */
+  saveEpisodes(
+    site: SiteId,
+    novelKey: string,
+    episodes: Episode[]
+  ): { count: number; newKeys: string[]; hadPreviousBackup: boolean } {
     return transaction(this.db, () => {
-      const novelId = (
-        this.db.prepare("SELECT id FROM novels WHERE site = ? AND novel_key = ?").get(site, novelKey) as any
-      )?.id;
+      const novelRow = this.db
+        .prepare("SELECT id, last_backup_all_at FROM novels WHERE site = ? AND novel_key = ?")
+        .get(site, novelKey) as { id: number; last_backup_all_at: string | null } | undefined;
+      const novelId = novelRow?.id;
 
       if (!novelId) throw new Error(`Novel not found: ${site}/${novelKey}`);
+      const hadPreviousBackup = !!novelRow.last_backup_all_at;
 
+      const existingKeys = new Set(
+        (this.db.prepare("SELECT episode_key FROM episodes WHERE novel_id = ?").all(novelId) as Array<{ episode_key: string }>)
+          .map((r) => r.episode_key)
+      );
+      const newKeys: string[] = [];
       let addedCount = 0;
       const stmt = this.db.prepare(
         `INSERT INTO episodes (novel_id, episode_key, position, title, chapter, site_published_at, site_updated_at, created_at)
@@ -267,6 +283,10 @@ export class BackupRepository {
         stmt.run(novelId, ep.episodeKey, ep.position, ep.title, ep.chapter || null,
           normalizeSourceDate(ep.publishedAt), normalizeSourceDate(ep.updatedAt) ?? normalizeSourceDate(ep.publishedAt), nowIso());
         addedCount++;
+        if (!existingKeys.has(ep.episodeKey)) {
+          existingKeys.add(ep.episodeKey);
+          newKeys.push(ep.episodeKey);
+        }
       }
 
       // バックアップを完了したエピソード数とタイムスタンプを更新。
@@ -282,7 +302,7 @@ export class BackupRepository {
         )
         .run(nowIso(), episodes.length, novelId);
 
-      return addedCount;
+      return { count: addedCount, newKeys, hadPreviousBackup };
     });
   }
 
@@ -292,7 +312,8 @@ export class BackupRepository {
     episodeKey: string,
     content: EpisodeContent,
     listUpdatedAt?: string | null
-  ): boolean {
+  ): { saved: boolean; revised: boolean } {
+    // revised: 既に空でない本文があった話に、異なる本文の新バージョンを保存した(改稿)場合のみ true
     // 更新検出の基準日時: 本文側で取れなければ話一覧側の更新日時を使う
     const siteUpdatedAt = content.updatedAt || listUpdatedAt || null;
     return transaction(this.db, () => {
@@ -306,13 +327,13 @@ export class BackupRepository {
 
       if (!episodeId) {
         console.warn(`Episode not found: ${site}/${novelKey}/${episodeKey}`);
-        return false;
+        return { saved: false, revised: false };
       }
 
       // 空本文は保存しない(取得済み扱いになり再取得されなくなるため)
       if (!content.bodyHtml || !content.bodyHtml.trim()) {
         console.warn(`Empty body skipped: ${site}/${novelKey}/${episodeKey}`);
-        return false;
+        return { saved: false, revised: false };
       }
 
       // コンテンツハッシュを計算（変更検出用）
@@ -322,13 +343,13 @@ export class BackupRepository {
       const lastVersion = (
         this.db
           .prepare(
-            `SELECT id, version, content_hash FROM episode_versions
+            `SELECT id, version, content_hash, length(trim(body_html)) AS body_len FROM episode_versions
            WHERE episode_id = ?
            ORDER BY version DESC
            LIMIT 1`
           )
           .get(episodeId) as any
-      ) || { id: null, version: 0, content_hash: null };
+      ) || { id: null, version: 0, content_hash: null, body_len: 0 };
 
       // ハッシュが変わっていなければスキップ。ただし更新日時は記録し、毎回再取得されないようにする
       if (lastVersion.content_hash === contentHash) {
@@ -337,7 +358,7 @@ export class BackupRepository {
             .prepare(`UPDATE episode_versions SET site_updated_at = ? WHERE id = ?`)
             .run(siteUpdatedAt, lastVersion.id);
         }
-        return false;
+        return { saved: false, revised: false };
       }
 
       const newVersion = lastVersion.version + 1;
@@ -358,7 +379,7 @@ export class BackupRepository {
           nowIso()
         );
 
-      return true;
+      return { saved: true, revised: !!lastVersion.id && Number(lastVersion.body_len) > 0 };
     });
   }
 

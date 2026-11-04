@@ -154,21 +154,6 @@ export class BackupManager {
         completedTasks: counter.processed,
         failedTasks: counter.failed,
       });
-
-      // バックアップ完了時に管理者ユーザーに通知を送る
-      try {
-        const adminUsers = this.db.prepare(`SELECT id FROM users WHERE role = 'admin'`).all() as { id: number }[];
-        for (const admin of adminUsers) {
-          this.notificationRepository.createNotification(
-            admin.id,
-            "backup",
-            "バックアップが完了しました",
-            `${counter.processed}個のタスクが完了しました`
-          );
-        }
-      } catch (e) {
-        console.error("[Backup] Failed to send notification:", e);
-      }
     } catch (error) {
       console.error("[Backup] Run failed:", error);
       this.repository.finishRunStats(runStats.id, "failed");
@@ -209,8 +194,13 @@ export class BackupManager {
         this.repository.saveNovelMetadata(task.site, task.novelKey, result.metadata);
       }
 
+      // 更新通知用の集計(初回バックアップの全話や空本文の再取得は更新に含めない)
+      let newEpisodes = 0;
+      let revisedEpisodes = 0;
+
       if (result.episodes) {
-        this.repository.saveEpisodes(task.site, task.novelKey, result.episodes);
+        const saved = this.repository.saveEpisodes(task.site, task.novelKey, result.episodes);
+        if (saved.hadPreviousBackup) newEpisodes = saved.newKeys.length;
         if (task.taskType !== "metadata" && this.config.backupScopes.includes("content")) {
           const scraper = this.scrapers.get(task.site);
           if (!scraper) throw new Error(`No scraper for site: ${task.site}`);
@@ -237,14 +227,15 @@ export class BackupManager {
           for (const episode of targets) {
             await this.waitForRequestWindow();
             const content = await scraper.scrapeEpisodeContent(task.novelKey, episode.episodeKey);
-            const saved = this.repository.saveEpisodeContent(
+            const r = this.repository.saveEpisodeContent(
               task.site,
               task.novelKey,
               episode.episodeKey,
               content,
               episode.updatedAt
             );
-            if (saved) savedContentCount++;
+            if (r.saved) savedContentCount++;
+            if (r.revised) revisedEpisodes++;
           }
           if (targets.length > 0) {
             console.log(`[Backup] Saved ${savedContentCount}/${targets.length} updated episodes for ${task.novelKey}`);
@@ -255,6 +246,8 @@ export class BackupManager {
       this.repository.completeTask(task.id);
       this.repository.incrementRunStatsCompleted(runId, result.episodes?.length || 0);
       counter.processed++;
+
+      this.notifyUpdate(task.site, task.novelKey, newEpisodes, revisedEpisodes);
 
       if (counter.processed % 10 === 0) {
         console.log(`[Backup] Progress: ${counter.processed}/${counter.total} tasks completed`);
@@ -287,6 +280,16 @@ export class BackupManager {
         completedTasks: counter.processed,
         failedTasks: counter.failed,
       });
+    }
+  }
+
+  /** 更新があった作品をブックマーク中の全ユーザーに通知。失敗してもバックアップは失敗させない。 */
+  private notifyUpdate(site: SiteId, novelKey: string, newCount: number, revisedCount: number): void {
+    if (newCount <= 0 && revisedCount <= 0) return;
+    try {
+      this.notificationRepository.notifyNovelUpdate(site, novelKey, newCount, revisedCount);
+    } catch (e) {
+      console.error("[Backup] Failed to send update notification:", e);
     }
   }
 
