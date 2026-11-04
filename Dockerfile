@@ -32,6 +32,7 @@ COPY --from=build /usr/local/bin/node /usr/local/bin/node
 
 WORKDIR /app
 COPY server/python/requirements.txt server/python/
+# ここで入れた版がフォールバック。日次自動更新の venv は実行時に /data/python へ作る(イメージは変更しない)
 RUN pip install -r server/python/requirements.txt
 
 COPY --from=build /app/package.json ./

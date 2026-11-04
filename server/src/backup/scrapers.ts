@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { normalizeSourceDate } from "./dates.js";
+import { resolveScraperPython } from "./pythonUpdater.js";
 import { Episode, EpisodeContent, NovelMetadata, SiteId } from "./types.js";
 
 type PythonOperation = "metadata" | "episodes" | "content";
@@ -60,7 +61,8 @@ async function runPython<T>(
   const args = ["-X", "utf8", pythonScript, "--site", site, "--novel-key", novelKey, "--operation", operation];
   if (episodeKey) args.push("--episode-key", episodeKey);
 
-  const child = spawn(pythonBin, args, {
+  // 自動更新された overlay(venv)があればその python を使う。spawn 毎に解決するので切り替え中でも安全
+  const child = spawn(resolveScraperPython(pythonBin), args, {
     cwd: path.resolve(here, "../.."),
     env: { ...process.env, PYTHONUTF8: "1" },
     windowsHide: true,

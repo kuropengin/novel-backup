@@ -98,6 +98,15 @@ server {
 - DB: `./data/novel-backup.db`。バックアップはこのファイルをコピーする(停止中が安全。稼働中なら `sqlite3 data/novel-backup.db ".backup backup.db"`)。
 - 配布 APK: `./data/apk/novel-backup.apk` に置くと `https://<ドメイン>/download` から取得できる(開発機で `npm run mobile:apk` すると開発機の `data/apk/` に出力されるので、それをサーバーの `./data/apk/` へコピーする)。
 
+## scrapling の自動更新
+
+既定で毎日 04:00(コンテナの `TZ`、既定 Asia/Tokyo)に scrapling の最新版を確認し、新しければ `/data/python/venvs/` に venv を作って切り替える(`.env` の `SCRAPLING_AUTO_UPDATE=false` で無効、`SCRAPLING_UPDATE_TIME=HH:mm` で時刻変更)。イメージの再ビルドは不要。詳細な手順・安全策は [05_deployment.md](05_deployment.md#scrapling-の自動更新)。
+
+- 書き込み先は `/data`(UID 1000 で書き込み可、ホストの `./data` に永続化)だけ。root 権限もイメージの変更も不要で、コンテナを作り直しても `./data/python` が残るため更新済みの版が引き継がれる。イメージに入っている pip インストール済みの版は常にフォールバック。
+- イメージを再ビルドしたとき: overlay の scrapling がイメージ同梱の版以下、または Python のマイナーバージョンが違う場合は、起動時に overlay を自動で破棄してイメージの版に戻る(古い overlay が新しいイメージを上書きしない)。
+- venv 2 世代分のディスク(数百 MB 程度)を `./data/python` に使う。
+- 無審査の第三者コードを毎日取り込む点に注意(wheel のみ・self-test・ロールバックはあるが悪意ある版は防げない)。
+
 ## 更新
 
 ```bash

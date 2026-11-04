@@ -427,13 +427,54 @@ def scrape_kakuyomu_content(novel_key: str, episode_key: str):
     }
 
 
+SELF_TEST_HTML = """<html><head><title>t</title></head><body>
+<h1 class="p-novel__title">第一話</h1>
+<div class="js-novel-text p-novel__text">
+<p>こんにちは</p><p><br></p><p><ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby>です</p>
+</div>
+<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"__APOLLO_STATE__":{"Work:1":{"id":"1"}}}}}</script>
+</body></html>"""
+
+
+def self_test() -> dict:
+    """ネットワークなしの自己診断。Fetcher の import と、本スクリプトの抽出関数で固定 HTML を解析できることを確認する。
+    更新ジョブ(pythonUpdater.ts)が、新しい scrapling を有効化する前に実行する。"""
+    from importlib import metadata
+
+    if not callable(getattr(Fetcher, "get", None)):
+        raise RuntimeError("Fetcher.get is not callable")
+    tree = html.fromstring(SELF_TEST_HTML)
+    title = first_text(tree, ["//h1[contains(@class,'p-novel__title')]"])
+    body = first_block(tree, ["//div[contains(@class,'js-novel-text')]"])
+    state = kakuyomu_apollo_state(tree)
+    expected_body = "こんにちは" + chr(10) * 2 + "漢字《かんじ》です"
+    if title != "第一話":
+        raise RuntimeError(f"title mismatch: {title!r}")
+    if body != expected_body:
+        raise RuntimeError(f"body mismatch: {body!r}")
+    if state.get("Work:1", {}).get("id") != "1":
+        raise RuntimeError("apollo state mismatch")
+    return {"scrapling": metadata.version("scrapling"), "python": f"{sys.version_info.major}.{sys.version_info.minor}"}
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--site", required=True, choices=["narou", "hameln", "kakuyomu"])
-    parser.add_argument("--novel-key", required=True)
-    parser.add_argument("--operation", required=True, choices=["metadata", "episodes", "content"])
+    parser.add_argument("--site", choices=["narou", "hameln", "kakuyomu"])
+    parser.add_argument("--novel-key")
+    parser.add_argument("--operation", choices=["metadata", "episodes", "content"])
     parser.add_argument("--episode-key")
+    parser.add_argument("--self-test", action="store_true", help="ネットワークなしの自己診断(更新ジョブ用)")
     args = parser.parse_args()
+
+    if args.self_test:
+        try:
+            print(json.dumps({"ok": True, "data": self_test()}, ensure_ascii=False))
+        except Exception as exc:
+            print(json.dumps({"ok": False, "error": f"self-test failed: {exc}"}, ensure_ascii=False))
+            sys.exit(1)
+        return
+    if not (args.site and args.novel_key and args.operation):
+        parser.error("--site, --novel-key and --operation are required")
 
     dispatch = {
         "narou": {
