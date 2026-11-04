@@ -79,7 +79,7 @@ npm run mobile:sync   # mobile をビルドして cap sync android
 npm run mobile:apk    # gradlew assembleDebug → mobile/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`mobile/scripts/apk.mjs` は JAVA_HOME が未設定または JDK 22 以上のとき `%USERPROFILE%\.jdks` から JDK 21 を自動検出し、ANDROID_HOME が未設定なら `%LOCALAPPDATA%\Android\Sdk` を使う。詳細は [mobile/README.md](../mobile/README.md)。
+`mobile/scripts/apk.ts` は JAVA_HOME が未設定または JDK 22 以上のとき `%USERPROFILE%\.jdks` から JDK 21 を自動検出し、ANDROID_HOME が未設定なら `%LOCALAPPDATA%\Android\Sdk` を使う。詳細は [mobile/README.md](../mobile/README.md)。
 
 ## 外部リンク
 
