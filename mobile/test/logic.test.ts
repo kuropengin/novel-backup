@@ -190,17 +190,14 @@ describe("external link policy", () => {
 });
 
 describe("formatDateTime", () => {
-  const now = new Date(2026, 10, 4, 12, 0).getTime();
-  it("今年は年を省略し、時刻は 0 埋め", () => {
-    expect(formatDateTime(new Date(2026, 9, 31, 11, 0).toISOString(), now)).toBe("10/31 11:00");
-    expect(formatDateTime(new Date(2026, 0, 2, 3, 4).toISOString(), now)).toBe("1/2 03:04");
-  });
-  it("今年以外は年を付ける", () => {
-    expect(formatDateTime(new Date(2025, 11, 27, 23, 59).toISOString(), now)).toBe("2025/12/27 23:59");
+  it("常に年を付け、時刻は 0 埋め", () => {
+    expect(formatDateTime(new Date(2026, 9, 31, 11, 0).toISOString())).toBe("2026/10/31 11:00");
+    expect(formatDateTime(new Date(2026, 0, 2, 3, 4).toISOString())).toBe("2026/1/2 03:04");
+    expect(formatDateTime(new Date(2025, 11, 27, 23, 59).toISOString())).toBe("2025/12/27 23:59");
   });
   it("null・undefined・不正値は空文字", () => {
-    expect(formatDateTime(null, now)).toBe("");
-    expect(formatDateTime(undefined, now)).toBe("");
-    expect(formatDateTime("xx", now)).toBe("");
+    expect(formatDateTime(null)).toBe("");
+    expect(formatDateTime(undefined)).toBe("");
+    expect(formatDateTime("xx")).toBe("");
   });
 });
