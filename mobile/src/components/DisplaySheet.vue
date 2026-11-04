@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import BottomSheet from "./BottomSheet.vue";
-import { FONT_SIZES_PX, FONT_STACKS, LINE_HEIGHTS, type DisplaySettings } from "../display";
+import { FONT_SIZES_PX, fontStackOf, LINE_HEIGHTS, type DisplaySettings } from "../display";
 
 /** 「Aa」: 本文の表示設定(フォント・文字サイズ・行間)。各サイトの話ページの本文にだけ適用される。 */
 const props = defineProps<{ open: boolean; display: DisplaySettings }>();
@@ -13,7 +13,7 @@ function set(patch: Partial<DisplaySettings>) {
 const previewStyle = computed(() => ({
   fontSize: FONT_SIZES_PX[props.display.fontSize - 1] + "px",
   lineHeight: String(props.display.lineHeight),
-  fontFamily: FONT_STACKS[props.display.font],
+  fontFamily: fontStackOf(props.display.font),
 }));
 const sizes = [1, 2, 3, 4, 5] as const;
 </script>
@@ -24,6 +24,7 @@ const sizes = [1, 2, 3, 4, 5] as const;
     <div class="seg">
       <button :class="{ active: display.font === 'mincho' }" @click="set({ font: 'mincho' })">明朝</button>
       <button :class="{ active: display.font === 'gothic' }" @click="set({ font: 'gothic' })">ゴシック</button>
+      <button :class="{ active: display.font === 'site' }" @click="set({ font: 'site' })">変更しない<br /><span class="seg-note">(サイト依存)</span></button>
     </div>
     <div class="group-label">文字サイズ({{ FONT_SIZES_PX[display.fontSize - 1] }}px)</div>
     <div class="seg">
@@ -37,3 +38,7 @@ const sizes = [1, 2, 3, 4, 5] as const;
     <p class="muted">各サイトの話ページの本文にのみ適用されます。</p>
   </BottomSheet>
 </template>
+
+<style scoped>
+.seg-note { font-size: 11px; font-weight: 400; }
+</style>

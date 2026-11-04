@@ -7,7 +7,7 @@ import type { SiteId } from "../logic/sites";
 import { getOfflineNovel } from "../stores/offlineLibrary";
 import { loadProgress, setRead } from "../stores/readProgress";
 import { resumeIndex } from "../logic/readProgress";
-import { FONT_SIZES_PX, FONT_STACKS, type DisplaySettings } from "../display";
+import { FONT_SIZES_PX, fontStackOf, type DisplaySettings } from "../display";
 import { pushOverlay } from "../stores/overlays";
 
 interface ReaderEpisode {
@@ -58,7 +58,7 @@ const isLast = computed(() => currentIndex.value >= episodes.value.length - 1);
 const bodyStyle = computed(() => ({
   fontSize: `${FONT_SIZES_PX[props.display.fontSize - 1]}px`,
   lineHeight: String(props.display.lineHeight),
-  fontFamily: FONT_STACKS[props.display.font],
+  fontFamily: fontStackOf(props.display.font),
 }));
 
 function fmtDateTime(iso: string | null | undefined): string {

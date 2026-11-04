@@ -1,11 +1,12 @@
 /**
- * エピソード本文の表示設定(文字サイズ・行間・明朝/ゴシック)。
+ * エピソード本文の表示設定(文字サイズ・行間・明朝/ゴシック/変更しない)。
  * 配色や広告には一切触れない。各サイトの本文コンテナだけに CSS を適用する。
  */
 export interface DisplaySettings {
   fontSize: 1 | 2 | 3 | 4 | 5;
   lineHeight: number;
-  font: "mincho" | "gothic";
+  /** "site" はフォントを変更しない(サイト依存) */
+  font: "mincho" | "gothic" | "site";
 }
 
 export const FONT_SIZES_PX = [15, 17, 19, 22, 26] as const;
@@ -14,6 +15,11 @@ export const FONT_STACKS = {
   mincho: '"Hiragino Mincho ProN","Yu Mincho","YuMincho","Noto Serif JP","Noto Serif CJK JP","MS PMincho",serif',
   gothic: 'system-ui,"Hiragino Sans","Noto Sans JP","Noto Sans CJK JP","Yu Gothic","Meiryo",sans-serif',
 } as const;
+
+/** 指定する font-family。"site" は指定しない(undefined) */
+export function fontStackOf(font: DisplaySettings["font"]): string | undefined {
+  return font === "site" ? undefined : FONT_STACKS[font];
+}
 
 export const DEFAULT_DISPLAY: DisplaySettings = { fontSize: 3, lineHeight: 1.9, font: "mincho" };
 
@@ -25,7 +31,7 @@ export function sanitizeDisplay(input: Partial<Record<string, unknown>> | null |
   const fontSize = (Number.isInteger(fs) && fs >= 1 && fs <= 5 ? fs : d.fontSize) as DisplaySettings["fontSize"];
   const lh = Number(i.lineHeight);
   const lineHeight = (LINE_HEIGHTS as readonly number[]).includes(lh) ? lh : d.lineHeight;
-  const font = i.font === "gothic" || i.font === "mincho" ? i.font : d.font;
+  const font = i.font === "gothic" || i.font === "mincho" || i.font === "site" ? i.font : d.font;
   return { fontSize, lineHeight, font };
 }
 
@@ -61,8 +67,10 @@ export function buildCss(hostname: string, d: DisplaySettings): string {
   const px = FONT_SIZES_PX[d.fontSize - 1];
   const sel = site.bodySelectors.flatMap((c) => [c, `${c} p`]).join(",");
   const rt = site.bodySelectors.map((c) => `${c} rt`).join(",");
+  const stack = fontStackOf(d.font);
+  const family = stack ? `font-family:${stack} !important;` : "";
   return [
-    `${sel}{font-size:${px}px !important;line-height:${d.lineHeight} !important;font-family:${FONT_STACKS[d.font]} !important;}`,
+    `${sel}{font-size:${px}px !important;line-height:${d.lineHeight} !important;${family}}`,
     `${rt}{font-size:0.5em !important;line-height:1 !important;}`,
   ].join("\n");
 }

@@ -29,6 +29,12 @@ describe("本文 CSS", () => {
   it("明朝", () => {
     expect(buildCss(HOSTS.hameln, disp({ font: "mincho" }))).toContain(FONT_STACKS.mincho);
   });
+  it("変更しない(サイト依存)は font-family を出さず、サイズ・行間は残す", () => {
+    const css = buildCss(HOSTS.kakuyomu, disp({ fontSize: 5, lineHeight: 2.2, font: "site" }));
+    expect(css).not.toContain("font-family");
+    expect(css).toContain(`font-size:${FONT_SIZES_PX[4]}px`);
+    expect(css).toContain("line-height:2.2");
+  });
   it("サイト別の本文セレクタ", () => {
     expect(buildCss(HOSTS.narou, disp())).toContain(".p-novel__text");
     expect(buildCss(HOSTS.hameln, disp())).toMatch(/#honbun.*#maegaki.*#atogaki/s);
@@ -51,6 +57,7 @@ describe("sanitizeDisplay", () => {
   it("不正値は既定へ", () => {
     expect(sanitizeDisplay({ fontSize: 99, lineHeight: 3, font: "y" })).toEqual(DEFAULT_DISPLAY);
     expect(sanitizeDisplay(null)).toEqual(DEFAULT_DISPLAY);
+    expect(sanitizeDisplay({ font: "site" }).font).toBe("site");
   });
   it("正しい値は保持し、旧テーマ/広告設定は捨てる", () => {
     const d = { fontSize: 4, lineHeight: 1.5, font: "gothic" } as const;
