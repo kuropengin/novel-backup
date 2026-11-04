@@ -11,7 +11,7 @@ import { online } from "../stores/network";
 import { notify } from "../stores/notifications";
 import { getOfflineNovel, listOfflineNovelKeys, saveOfflineNovel } from "../stores/offlineLibrary";
 import { getLocalProgress, hasPending, readVersion } from "../stores/readProgress";
-import { filterBookmarks, offlineOnly, sortBookmarks, SORT_OPTIONS, type SortKey, type SortOrder } from "../logic/lists";
+import { filterBookmarks, formatDateTime, offlineOnly, sortBookmarks, SORT_OPTIONS, type SortKey, type SortOrder } from "../logic/lists";
 import { siteColor, siteLabel, type SiteId } from "../logic/sites";
 
 const props = defineProps<{ settings: Settings }>();
@@ -36,6 +36,11 @@ let statusTimer: ReturnType<typeof setInterval> | null = null;
 const cfg = () => ({ serverUrl: props.settings.serverUrl, token: props.settings.token });
 
 /** 既読状況。未送信の変更がある作品は端末側の値を優先する */
+/** 一覧の副行に出す元サイト更新日時(無ければ空) */
+function updatedLabel(b: Bookmark): string {
+  return formatDateTime(b.sourceUpdatedAt);
+}
+
 function readInfo(b: Bookmark): { read: number; total: number; unread: number; lastKey: string | null } {
   void readVersion.value;
   const local = hasPending(b.site, b.novelKey) ? getLocalProgress(b.site, b.novelKey) : null;
@@ -261,8 +266,8 @@ function pick(key: SortKey) {
       <div class="list-row" role="button" tabindex="0" style="touch-action: manipulation; cursor: pointer" @click="openActionDialog(b)" @keydown.enter="openActionDialog(b)">
         <div class="main">
           <div class="title"><span class="site-badge" :style="{ background: siteColor(b.site) }">{{ siteLabel(b.site) }}</span>{{ b.title || b.novelKey }}</div>
-          <div v-if="b.author || readInfo(b).total > 0" class="sub">
-            {{ b.author }}<span v-if="readInfo(b).total > 0" class="prog" :class="{ done: readInfo(b).unread === 0 }">{{ b.author ? " ・ " : "" }}{{ readInfo(b).read }}/{{ readInfo(b).total }}話</span>
+          <div v-if="updatedLabel(b) || readInfo(b).total > 0" class="sub">
+            <template v-if="updatedLabel(b)">更新 {{ updatedLabel(b) }}</template><span v-if="readInfo(b).total > 0" class="prog" :class="{ done: readInfo(b).unread === 0 }">{{ updatedLabel(b) ? " ・ " : "" }}{{ readInfo(b).read }}/{{ readInfo(b).total }}話</span>
           </div>
         </div>
         <!-- 未読話数 / バックアップ / オフライン保存の状態 -->

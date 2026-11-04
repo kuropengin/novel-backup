@@ -84,6 +84,16 @@ export function formatDate(iso: string): string {
   return `${t.getFullYear()}/${t.getMonth() + 1}/${t.getDate()}`;
 }
 
+/** ISO 日時 → "10/31 11:00"(端末のタイムゾーン)。今年でなければ "2025/10/31 11:00"。null・不正な値は空文字。 */
+export function formatDateTime(iso: string | null | undefined, now: number = Date.now()): string {
+  if (!iso) return "";
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return "";
+  const hm = `${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+  const md = `${t.getMonth() + 1}/${t.getDate()}`;
+  return t.getFullYear() === new Date(now).getFullYear() ? `${md} ${hm}` : `${t.getFullYear()}/${md} ${hm}`;
+}
+
 /** ユーザー名の頭文字(アバター用)。空なら "?"。 */
 export function initialOf(name: string): string {
   const ch = Array.from(name.trim())[0];

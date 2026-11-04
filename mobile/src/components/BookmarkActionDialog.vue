@@ -3,7 +3,7 @@ import { computed } from "vue";
 import Icon from "./Icon.vue";
 import BottomSheet from "./BottomSheet.vue";
 import type { Bookmark } from "../api";
-import { formatDate } from "../logic/lists";
+import { formatDate, formatDateTime } from "../logic/lists";
 
 export interface BookmarkActionDialogProps {
   open: boolean;
@@ -69,7 +69,8 @@ function handleBackup() {
     <div v-if="props.bookmark" class="dialog-content">
       <div class="bookmark-header">
         <div class="title">{{ props.bookmark.title || props.bookmark.novelKey }}</div>
-        <div class="author">{{ props.bookmark.author }}</div>
+        <div class="author">{{ props.bookmark.author || "作者不明" }}</div>
+        <div v-if="props.bookmark.sourceUpdatedAt" class="backup-info">更新日: {{ formatDateTime(props.bookmark.sourceUpdatedAt) }}</div>
         <div class="backup-info">追加日: {{ formatDate(props.bookmark.createdAt) }}</div>
         <div class="backup-info">
           最終バックアップ日時: {{ props.bookmark.lastBackupAllAt ? formatDate(props.bookmark.lastBackupAllAt) : "未バックアップ" }}

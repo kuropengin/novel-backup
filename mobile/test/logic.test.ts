@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ScrollHideController } from "../src/logic/scrollHide";
 import { enqueue, flushQueue, sanitizeQueue, type QueuedView } from "../src/logic/historyQueue";
-import { filterBookmarks, formatDate, initialOf, offlineOnly, relativeTime, sortBookmarks, type BookmarkLike } from "../src/logic/lists";
+import { filterBookmarks, formatDate, formatDateTime, initialOf, offlineOnly, relativeTime, sortBookmarks, type BookmarkLike } from "../src/logic/lists";
 import { addNotification, markAllRead, markRead, removeNotification, sanitizeNotifications, unreadCount, MAX_NOTIFICATIONS } from "../src/logic/notifications";
 import { classifyUrl, isAllowedHost, isInAppUrl, externalOpenTarget, truncateUrl } from "../src/logic/sites";
 
@@ -186,5 +186,21 @@ describe("external link policy", () => {
   it("truncates long urls", () => {
     expect(truncateUrl("https://a.b/", 100)).toBe("https://a.b/");
     expect(truncateUrl("x".repeat(200), 100)).toHaveLength(100);
+  });
+});
+
+describe("formatDateTime", () => {
+  const now = new Date(2026, 10, 4, 12, 0).getTime();
+  it("今年は年を省略し、時刻は 0 埋め", () => {
+    expect(formatDateTime(new Date(2026, 9, 31, 11, 0).toISOString(), now)).toBe("10/31 11:00");
+    expect(formatDateTime(new Date(2026, 0, 2, 3, 4).toISOString(), now)).toBe("1/2 03:04");
+  });
+  it("今年以外は年を付ける", () => {
+    expect(formatDateTime(new Date(2025, 11, 27, 23, 59).toISOString(), now)).toBe("2025/12/27 23:59");
+  });
+  it("null・undefined・不正値は空文字", () => {
+    expect(formatDateTime(null, now)).toBe("");
+    expect(formatDateTime(undefined, now)).toBe("");
+    expect(formatDateTime("xx", now)).toBe("");
   });
 });
