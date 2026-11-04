@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { App as CapApp } from "@capacitor/app";
 import Shell from "./Shell.vue";
 import AuthView from "./views/AuthView.vue";
@@ -11,11 +11,21 @@ import { measureLayout } from "./stores/layout";
 import { loadTheme } from "./stores/theme";
 import { loadNotifications } from "./stores/notifications";
 import { startNetwork } from "./stores/network";
+import { clearAdblock, startAdblock } from "./stores/adblock";
 
 const settings = ref<Settings>({ ...EMPTY_SETTINGS });
 const display = ref<DisplaySettings>({ ...DEFAULT_DISPLAY });
 const ready = ref(false);
 const loggedIn = computed(() => !!settings.value.token);
+
+// 広告ブロック: ログイン/ユーザー切替で適用し直し、ログアウト(トークン破棄)で破棄する
+watch(
+  () => [settings.value.token, settings.value.username, settings.value.serverUrl] as const,
+  ([token, username, serverUrl]) => {
+    if (token && username && serverUrl) void startAdblock({ serverUrl, token }, username);
+    else void clearAdblock();
+  },
+);
 
 onMounted(async () => {
   measureLayout();

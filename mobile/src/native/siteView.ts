@@ -34,6 +34,22 @@ export interface SiteViewState {
   canGoBack: boolean;
 }
 
+/** ブロックリスト 1 件の取得・解析状況 */
+export interface BlocklistStatus {
+  url: string;
+  /** 取り込んだブロック対象ドメイン数 */
+  domains: number;
+  /** キャッシュの更新時刻(エポック ms)。まだ取得できていなければ null */
+  updatedAt: number | null;
+  /** 取得/解析に失敗したときのメッセージ(キャッシュがあればそれで動作中)。無ければ null */
+  error: string | null;
+}
+export interface BlocklistStatusResult {
+  lists: BlocklistStatus[];
+  /** ダウンロード/解析の処理中なら true */
+  loading: boolean;
+}
+
 export interface SiteViewPlugin {
   open(o: { url: string; top: number; bottom: number }): Promise<void>;
   close(): Promise<void>;
@@ -45,6 +61,12 @@ export interface SiteViewPlugin {
   getState(): Promise<SiteViewState>;
   evaluate(o: { code: string }): Promise<{ result: string }>;
   insertCss(o: { code: string }): Promise<void>;
+  /**
+   * 広告ブロックに使うリスト(https URL)を設定する。すぐに戻り、ダウンロードと解析はバックグラウンド。
+   * 空配列で即座に無効化。端末の DNS は変更せず、サイトビューア内でドメイン一致により遮断するだけ。
+   */
+  setBlocklists(o: { urls: string[] }): Promise<void>;
+  getBlocklistStatus(): Promise<BlocklistStatusResult>;
   addListener(e: "pageStarted" | "pageFinished", cb: (d: PageEvent) => void): Promise<PluginListenerHandle>;
   /** http/https/mailto/tel のみ。既定ブラウザ等で開く(開けなければ reject) */
   openExternal(o: { url: string }): Promise<void>;

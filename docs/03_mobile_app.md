@@ -72,6 +72,15 @@ SiteView の `pageFinished`(カクヨムの SPA 遷移は合成イベント)毎�
 
 3 サイト以外のホストでは何も注入しない。変更は次のページ読み込みから反映(ブラウザが開いている場合は再注入を試みる)。ロジックは `src/display/index.ts`(純粋関数、`test/display.test.ts` で検証)。
 
+## 広告ブロック
+
+サイトビューア(SiteView)内だけで、DNS 形式ブロックリストのドメインへの通信を遮断する。**端末の DNS は変更しない**(WebView にリゾルバ差し替えは無く、VpnService も使わない)。
+
+- リスト設定はユーザー別にサーバー(`/api/blocklists`)が保持。端末が有効な URL をダウンロードして解析する(サーバーは URL を取得しない)。`stores/adblock.ts` が起動時・ログイン後に取得し、有効 URL を Preferences にキャッシュ(ユーザー名付き。ネットワーク不達時はこれを使う)して `SiteView.setBlocklists({urls})` を呼ぶ。ログアウト/ユーザー切替(`App.vue` の watch)で `setBlocklists({urls: []})` とキャッシュ削除。
+- ネイティブ: `BlocklistManager`(ダウンロード/キャッシュ/世代管理/差し替え)、`BlocklistParser`(hosts・ドメイン行・`*.domain`・`||domain^`・`@@||domain^` 例外。修飾子/パス/正規表現/内部ワイルドカードは読み飛ばし)、`DomainMatcher`(完全一致+親ドメイン、例外優先)。いずれも Android 非依存で `app/src/test` の JUnit でテスト。キャッシュは `filesDir/blocklists/<sha256(url)>.txt`、24 時間で再取得、失敗時はキャッシュへフォールバック(fail-open)、1 リスト 30MB・合計 50 万ドメインまで。
+- `SiteClient.shouldInterceptRequest`: メインフレーム以外の http(s) でホストが一致したら、空の `text/plain` 200 を返す。`ALLOWED_HOST_SUFFIXES`(3 サイト)とそのサブドメインは常に対象外、例外時は通常読み込み。アプリ UI の WebView には適用しない。
+- 設定画面の「広告ブロック」でリスト別のオン/オフ・件数・最終更新・失敗表示、独自リストの追加/削除(`getBlocklistStatus`)。
+
 ## ビルド
 
 ```bash

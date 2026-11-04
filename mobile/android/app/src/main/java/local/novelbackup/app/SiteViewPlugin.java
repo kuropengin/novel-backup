@@ -12,6 +12,7 @@ import android.view.ViewGroup;
 import android.view.animation.DecelerateInterpolator;
 import android.webkit.CookieManager;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -21,6 +22,7 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -29,7 +31,12 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 
 import org.json.JSONObject;
 
+import java.io.ByteArrayInputStream;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * SiteView: Capacitor のブリッジ WebView(アプリ UI)の上に、ネイティブ WebView(サイト表示用)を矩形で重ねる。
@@ -67,8 +74,53 @@ public class SiteViewPlugin extends Plugin {
     private ValueAnimator animator;
     private View.OnLayoutChangeListener layoutListener;
     private int[] lastMargins = new int[]{-1, -1, -1, -1};
+    /** 広告ブロック用ドメインマッチャの管理(SiteView の WebView にだけ適用。アプリ UI の WebView には触れない) */
+    private volatile BlocklistManager blocklists;
+
+    @Override
+    public void load() {
+        blocklists = new BlocklistManager(new java.io.File(getContext().getFilesDir(), "blocklists"));
+    }
 
     // ------------------------------------------------------------------ plugin methods
+
+    /**
+     * 有効にするブロックリスト(https URL)を設定する。即座に戻り、ダウンロード/解析はバックグラウンドで行う。
+     * 空配列はマッチャを即座に破棄する。DNS は変更しない(WebView 内でドメイン一致により遮断するだけ)。
+     */
+    @PluginMethod
+    public void setBlocklists(PluginCall call) {
+        JSArray arr = call.getArray("urls");
+        if (arr == null) {
+            call.reject("urls is required");
+            return;
+        }
+        List<String> urls = new ArrayList<>();
+        for (int i = 0; i < arr.length(); i++) {
+            String u = arr.optString(i, null);
+            if (u != null) urls.add(u);
+        }
+        blocklists.apply(urls);
+        call.resolve();
+    }
+
+    /** リスト別の状況。updatedAt はキャッシュの更新時刻(エポック ms)で、無ければ null。 */
+    @PluginMethod
+    public void getBlocklistStatus(PluginCall call) {
+        JSArray lists = new JSArray();
+        for (BlocklistManager.Status st : blocklists.statuses()) {
+            JSObject o = new JSObject();
+            o.put("url", st.url);
+            o.put("domains", st.domains);
+            o.put("updatedAt", st.updatedAt > 0 ? (Object) st.updatedAt : JSObject.NULL);
+            o.put("error", st.error == null ? JSObject.NULL : st.error);
+            lists.put(o);
+        }
+        JSObject r = new JSObject();
+        r.put("lists", lists);
+        r.put("loading", blocklists.isLoading());
+        call.resolve(r);
+    }
 
     @PluginMethod
     public void open(PluginCall call) {
@@ -457,6 +509,31 @@ public class SiteViewPlugin extends Plugin {
     }
 
     private class SiteClient extends WebViewClient {
+        /**
+         * 広告ブロック: メインフレーム以外の http(s) で、ホストがブロックリストに一致したら空のレスポンスを返す。
+         * 許可ホスト(小説サイト本体)とそのサブドメインは決してブロックしない。例外時は null(通常どおり読み込む)。
+         * 200 + text/plain の空ボディにして、script は空として読み込み完了、fetch/XHR は CORS エラーを出さないようにする。
+         */
+        @Override
+        public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+            try {
+                if (request.isForMainFrame()) return null;
+                Uri uri = request.getUrl();
+                String scheme = uri.getScheme();
+                if (!("http".equals(scheme) || "https".equals(scheme))) return null;
+                String host = uri.getHost();
+                if (host == null || isAllowedHost(host)) return null;
+                BlocklistManager m = blocklists;
+                DomainMatcher dm = m == null ? null : m.matcher();
+                if (dm == null || !dm.isBlocked(host)) return null;
+                Map<String, String> headers = new HashMap<>();
+                headers.put("Access-Control-Allow-Origin", "*");
+                return new WebResourceResponse("text/plain", "utf-8", 200, "OK", headers, new ByteArrayInputStream(new byte[0]));
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
             // サブフレーム(Cloudflare チャレンジ iframe 等)は触らない

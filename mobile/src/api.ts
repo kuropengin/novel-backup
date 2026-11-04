@@ -121,6 +121,15 @@ export interface AuthStatus {
   user: { id: number; username: string; role: Role } | null;
 }
 
+/** 広告ブロック用リスト。presetKey が文字列ならプリセット(削除不可)、null ならユーザー追加 */
+export interface Blocklist {
+  id: number;
+  presetKey: string | null;
+  name: string;
+  url: string;
+  enabled: boolean;
+}
+
 export interface ApiConfig {
   serverUrl: string;
   token: string;
@@ -293,6 +302,22 @@ export async function getBackupStatus(cfg: ApiConfig): Promise<BackupStatus> {
   return (await call<BackupStatus>(cfg, "GET", "/api/backup/status")).data;
 }
 
+export async function listBlocklists(cfg: ApiConfig): Promise<Blocklist[]> {
+  return (await call<{ lists: Blocklist[] }>(cfg, "GET", "/api/blocklists")).data.lists;
+}
+
+export async function addBlocklist(cfg: ApiConfig, input: { name: string; url: string }): Promise<Blocklist> {
+  return (await call<{ list: Blocklist }>(cfg, "POST", "/api/blocklists", input)).data.list;
+}
+
+export async function setBlocklistEnabled(cfg: ApiConfig, id: number, enabled: boolean): Promise<Blocklist> {
+  return (await call<{ list: Blocklist }>(cfg, "PATCH", `/api/blocklists/${id}`, { enabled })).data.list;
+}
+
+export async function deleteBlocklist(cfg: ApiConfig, id: number): Promise<void> {
+  await call(cfg, "DELETE", `/api/blocklists/${id}`);
+}
+
 const MESSAGES: Record<string, string> = {
   invalid_credentials: "ユーザー名またはパスワードが正しくありません",
   too_many_requests: "試行回数が多すぎます。しばらく待ってから再試行してください",
@@ -307,6 +332,9 @@ const MESSAGES: Record<string, string> = {
   setup_disabled: "サーバーで SETUP_TOKEN が設定されていないため初期設定できません",
   invalid_setup_token: "セットアップトークンが正しくありません",
   internal_error: "サーバーでエラーが発生しました。しばらくしてから再試行してください",
+  blocklist_limit: "追加できるリストは 20 件までです。不要なリストを削除してください",
+  blocklist_duplicate: "その URL は既に登録されています",
+  blocklist_preset_undeletable: "プリインストールのリストは削除できません(オフにはできます)",
   validation_error: "入力内容が正しくありません(ユーザー名は英数字・_・- の 3〜32 文字、パスワードは 8〜128 文字)",
 };
 

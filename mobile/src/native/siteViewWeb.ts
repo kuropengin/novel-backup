@@ -1,5 +1,5 @@
 import { WebPlugin } from "@capacitor/core";
-import type { SiteViewPlugin, SiteViewState } from "./siteView";
+import type { BlocklistStatusResult, SiteViewPlugin, SiteViewState } from "./siteView";
 
 /**
  * Web フォールバック(vite dev 用)。デスクトップブラウザでは WebView を重ねられないので、
@@ -37,5 +37,8 @@ export class SiteViewWeb extends WebPlugin implements SiteViewPlugin {
   async openExternal(o: { url: string }): Promise<void> {
     window.open(o.url, "_blank", "noopener");
   }
-
+  async setBlocklists(_o: { urls: string[] }): Promise<void> {}
+  async getBlocklistStatus(): Promise<BlocklistStatusResult> {
+    return { lists: [], loading: false };
+  }
 }
