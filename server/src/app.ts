@@ -25,14 +25,16 @@ export interface CreateAppOptions {
   apkDir?: string;
   /** 初回管理者作成に必要なトークン(環境変数 SETUP_TOKEN)。未設定なら /api/auth/setup は無効 */
   setupToken?: string;
+  /** X-Forwarded-For を信用するプロキシ(省略時は loopback = 同一マシンのプロキシのみ) */
+  trustProxy?: string[];
   /** バックアップスケジューラの取得関数(省略時はグローバル。テストで差し替え) */
   getScheduler?: () => BackupScheduler;
 }
 
-export function createApp({ db, apkDir, setupToken, getScheduler }: CreateAppOptions): Express {
+export function createApp({ db, apkDir, setupToken, trustProxy = ["loopback"], getScheduler }: CreateAppOptions): Express {
   const app = express();
   app.disable("x-powered-by");
-  app.set("trust proxy", "loopback");
+  app.set("trust proxy", trustProxy);
 
   const ctx: AppContext = {
     db,

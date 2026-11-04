@@ -1,0 +1,17 @@
+**/node_modules
+**/dist
+**/__pycache__
+.git
+.github
+.claude
+.vscode
+.idea
+data
+.env
+.env.*
+*.log
+*.apk
+*.aab
+mobile/android
+mobile/assets
+docs

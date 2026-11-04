@@ -12,6 +12,7 @@
 |---|---|---|
 | `HOST` | `127.0.0.1` | 待ち受けアドレス。リバースプロキシ前提のため既定はループバックのみ。LAN から直接つなぐ開発時だけ `0.0.0.0` にする |
 | `PORT` | `3000` | 待ち受けポート |
+| `TRUST_PROXY` | `loopback` | `X-Forwarded-For` を信用するプロキシ(カンマ区切りの IP / CIDR / `loopback` 等)。Docker 構成では内部ネットワークの範囲を指定する([06_docker.md](06_docker.md)) |
 | `DATA_DIR` | `<repo>/data` | DB(`novel-backup.db`)と `apk/` の置き場 |
 | `SETUP_TOKEN` | なし | 初回管理者作成(`POST /api/auth/setup`)に必要なトークン。**未設定だと初期設定は無効**(`403 setup_disabled`)。十分長いランダム文字列にする(例: `openssl rand -base64 24`) |
 | `BACKUP_FREQUENCY` | `hourly` | `hourly` / `daily` / `weekly` |

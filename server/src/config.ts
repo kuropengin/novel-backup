@@ -9,6 +9,8 @@ export interface Config {
   /** 待ち受けアドレス。リバースプロキシ(同一マシン)前提で既定は 127.0.0.1 */
   host: string;
   port: number;
+  /** X-Forwarded-For を信用するプロキシ(Express の trust proxy 値。カンマ区切りの IP/CIDR/プリセット名)。既定 loopback */
+  trustProxy: string[];
   /** 初回管理者作成(/api/auth/setup)に必要なトークン。未設定なら初期設定は無効 */
   setupToken?: string;
   dataDir: string;
@@ -28,6 +30,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     host: env.HOST?.trim() || "127.0.0.1",
     port: Number(env.PORT || 3000),
+    trustProxy: (env.TRUST_PROXY || "loopback")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
     setupToken: env.SETUP_TOKEN?.trim() || undefined,
     dataDir: env.DATA_DIR ? path.resolve(env.DATA_DIR) : path.join(repoRoot, "data"),
     backupFrequency,

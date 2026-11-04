@@ -1,0 +1,29 @@
+# novel-backup: アプリ(API + 定期バックアップ)。HTTPS 終端は既存の nginx コンテナ(ネットワーク proxy_web)で行う
+#
+# 準備:
+#   1. cp .env.example .env して SETUP_TOKEN 等を設定
+#   2. mkdir -p data && sudo chown 1000:1000 data   (コンテナは UID 1000 で動く)
+#   3. nginx から http://novel-backup:3000 へ転送する(docs/06_docker.md)
+# 起動:  docker compose up -d --build
+
+services:
+  app:
+    build: .
+    image: novel-backup:latest
+    container_name: novel-backup   # nginx からこの名前で参照する
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATA_DIR: /data
+      # ポートはホストに公開せず、proxy_web 上の nginx からだけ届く。そのプライベート IP からの X-Forwarded-For を信用する
+      TRUST_PROXY: ${TRUST_PROXY:-uniquelocal}
+    volumes:
+      - ./data:/data   # DB(novel-backup.db)と配布用 APK(apk/novel-backup.apk)
+    networks:
+      - proxy_web
+
+networks:
+  proxy_web:
+    external: true   # ~/docker/proxy の compose が作成するネットワーク

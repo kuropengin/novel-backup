@@ -27,7 +27,12 @@ const persistedSchedule = readBackupScheduleSettings(db, {
   time: config.backupTime,
   maxParallel: config.backupMaxParallel,
 });
-const app = createApp({ db, apkDir: path.join(config.dataDir, "apk"), setupToken: config.setupToken });
+const app = createApp({
+  db,
+  apkDir: path.join(config.dataDir, "apk"),
+  setupToken: config.setupToken,
+  trustProxy: config.trustProxy,
+});
 const server = app.listen(config.port, config.host, () => {
   console.log(`novel-backup server: http://${config.host}:${config.port}`);
   if (!config.setupToken && (db.prepare("SELECT COUNT(*) AS c FROM users").get() as unknown as { c: number }).c === 0) {
