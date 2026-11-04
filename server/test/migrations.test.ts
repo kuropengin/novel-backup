@@ -24,6 +24,7 @@ describe("migrations", () => {
       "novels",
       "reading_progress",
       "sessions",
+      "user_blocklists",
       "users",
     ]);
   });
@@ -57,6 +58,7 @@ describe("migrations", () => {
       "novels",
       "reading_progress",
       "sessions",
+      "user_blocklists",
       "users",
     ]);
     expect(db.prepare("SELECT username FROM users").all()).toEqual([{ username: "admin" }]);

@@ -314,6 +314,20 @@ UPDATE novels SET source_updated_at = (
   WHERE e.novel_id = novels.id AND e.removed_at IS NULL
 );
 `,
+  // 14: ユーザーごとの広告ブロックリスト(プリセットは初回 GET で遅延投入、カスタムは preset_key が NULL)
+  `
+CREATE TABLE IF NOT EXISTS user_blocklists (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  preset_key TEXT,
+  name       TEXT NOT NULL,
+  url        TEXT NOT NULL,
+  enabled    INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  UNIQUE(user_id, url)
+);
+CREATE INDEX IF NOT EXISTS idx_user_blocklists_user ON user_blocklists(user_id);
+`,
 ];
 
 export function runMigrations(db: DatabaseSync): void {

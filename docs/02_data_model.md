@@ -11,6 +11,7 @@ SQLite(`node:sqlite`)。ファイルは `data/novel-backup.db`(WAL)。`PRAGMA us
 | `novels` | `id`, `site`(`hameln`/`narou`/`kakuyomu`), `novel_key`, `title`, `author`, `url`, `created_at`。`UNIQUE(site, novel_key)`。全ユーザー共有 |
 | `bookmarks` | `id`, `user_id`(→users, CASCADE), `novel_id`(→novels, CASCADE), `note`, `last_read_episode_key`, `created_at`。`UNIQUE(user_id, novel_id)` |
 | `history` | `id`, `user_id`(→users, CASCADE), `site`, `novel_key`, `episode_key`(作品ページは `''`), `novel_title`, `episode_title`, `url`, `viewed_at`。`UNIQUE(user_id, site, novel_key, episode_key)`、索引 `(user_id, viewed_at DESC)`。作品/話のページ毎に 1 行(再閲覧は `viewed_at` 更新) |
+| `user_blocklists` | `id`, `user_id`(→users, CASCADE), `preset_key`(プリセットは識別子、カスタムは NULL), `name`, `url`, `enabled`, `created_at`。`UNIQUE(user_id, url)`。プリセット行は初回 `GET /api/blocklists` で遅延投入 |
 
 
 ## マイグレーション
@@ -19,5 +20,7 @@ SQLite(`node:sqlite`)。ファイルは `data/novel-backup.db`(WAL)。`PRAGMA us
 2. `episode_versions`, `episodes`, `novel_meta_versions`, `backup_runs`, `settings` を `DROP TABLE IF EXISTS`。`users` / `sessions` / `novels` / `bookmarks` のデータは保持される。
 
 3. `history`(閲覧履歴)とその索引を追加。
+
+14. `user_blocklists`(ユーザーごとの広告ブロックリスト)とその索引を追加。
 
 既存 DB(v1/v2)は起動時に自動で最新へ上がる。

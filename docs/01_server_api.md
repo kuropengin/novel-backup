@@ -71,6 +71,21 @@ server/src/
 | `DELETE /?site=&novelKey=` | 作品単位で削除(両方必須、片方だけは 400)。`{ ok, deleted }` |
 | `DELETE /` | 自分の履歴を全消去。`{ ok, deleted }` |
 
+### 広告ブロックリスト `/api/blocklists`(認証必須・自分の分のみ)
+
+アプリの内蔵サイトビューアで「ドメイン一致で広告を遮断する」ための DNS 形式ブロックリストの URL を管理する。**サーバーはこれらの URL に一切アクセスしない**(ダウンロードと解析は端末のみ。SSRF の面を持たない)。端末の DNS は変更しない。
+
+リスト DTO: `id, presetKey(プリセットは文字列、カスタムは null), name, url, enabled`。
+
+| メソッド/パス | 内容 |
+|---|---|
+| `GET /` | `{ lists: [...] }`。初回(およびプリセット追加リリース後)に未投入のプリセットを遅延投入する(既存行の `enabled` は変更しない)。プリセット: `adguard-dns`(既定で有効。これだけ)、`peter-lowe`、`oisd-small`、`stevenblack`(いずれも既定は無効) |
+| `POST /` | `{ name, url }` → `201 { list }`(有効で作成)。`name` は trim 後 1〜64 文字。`url` は https のみ・2048 文字以内・認証情報なし・IP リテラル/`localhost`/`.local`/ドット無しホストは不可(`400 validation_error`)。カスタムは 1 ユーザー 20 件まで(超過 `400 blocklist_limit`)。同一 URL は `409 blocklist_duplicate`(プリセットの URL も含む) |
+| `PATCH /:id` | `{ enabled: boolean }` → `{ list }`。プリセット/カスタムとも可 |
+| `DELETE /:id` | カスタムのみ `{ ok }`。プリセットは `400 blocklist_preset_undeletable` |
+
+`:id` は 10 進整数のみ(不正は `400 validation_error`)。他ユーザーの行/無い行は `404 not_found`。
+
 ### ユーザー `/api/users`(admin のみ。未認証 401、viewer 403)
 
 | メソッド/パス | 内容 |

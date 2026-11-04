@@ -11,6 +11,7 @@ import { readingProgressRouter } from "./routes/readingProgress.js";
 import { historyRouter } from "./routes/history.js";
 import { usersRouter } from "./routes/users.js";
 import { notificationsRouter } from "./routes/notifications.js";
+import { blocklistsRouter } from "./routes/blocklists.js";
 import { createBackupRoutes } from "./routes/backup.js";
 import { downloadRouter } from "./routes/download.js";
 
@@ -57,6 +58,7 @@ export function createApp({ db, apkDir, setupToken, trustProxy = ["loopback"], g
   app.use("/api/history", historyRouter(db));
   app.use("/api/reading-progress", readingProgressRouter(db));
   app.use("/api/notifications", notificationsRouter(ctx));
+  app.use("/api/blocklists", blocklistsRouter(db));
   app.use("/api/backup", createBackupRoutes(db, { getScheduler }));
   if (apkDir) app.use("/download", downloadRouter(apkDir));
 
