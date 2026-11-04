@@ -29,6 +29,11 @@ ENV NODE_ENV=production \
 
 # Node は同じ Debian(trixie)ベースの公式イメージからバイナリだけ持ってくる
 COPY --from=build /usr/local/bin/node /usr/local/bin/node
+# Node の実行に必要な共有ライブラリを入れ、動くことをビルド時に確認する
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libatomic1 libstdc++6 libgcc-s1 \
+ && rm -rf /var/lib/apt/lists/* \
+ && node --version
 
 WORKDIR /app
 COPY server/python/requirements.txt server/python/
