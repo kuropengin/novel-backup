@@ -19,10 +19,11 @@ export class BackupScheduler {
   private cronJob: ScheduledTask | null = null;
   private config: ScheduleConfig;
 
-  constructor(db: Db, config: ScheduleConfig) {
+  /** manager はテスト用の差し替え口 */
+  constructor(db: Db, config: ScheduleConfig, manager?: BackupManager) {
     this.db = db;
     this.config = config;
-    this.manager = new BackupManager(db, config);
+    this.manager = manager ?? new BackupManager(db, config);
   }
 
   /**
@@ -63,6 +64,16 @@ export class BackupScheduler {
    */
   async trigger(): Promise<void> {
     await this.manager.runBackupCycle();
+  }
+
+  /**
+   * 作品 1 件だけを即時バックアップ(他作品のタスクは処理しない)。
+   * 実行中ならキュー追加のみで合流し、新たに開始した場合のみ true。バックグラウンドで実行する。
+   */
+  triggerNovel(site: SiteId, novelKey: string): boolean {
+    const started = !this.manager.isBusy();
+    this.manager.runNovelBackup(site, novelKey).catch((e) => console.error("[Scheduler] Single-novel backup failed:", e));
+    return started;
   }
 
   /**

@@ -145,13 +145,9 @@ export function createBackupRoutes(db: Db, opts: BackupRoutesOptions = {}): Rout
     if (!globalTriggerLimiter.take("global")) return rateLimited(res, globalTriggerLimiter.retryAfterSec("global"));
 
     const s = scheduler();
-    s.enqueueNovel(site, [novelKey], 100);
-    // 実行中なら新たなサイクルは起動せず、キューへの追加のみ(合流)
-    const alreadyRunning = s.getStatus().running;
-    if (!alreadyRunning) {
-      s.trigger().catch((e) => console.error("[Backup] manual trigger failed:", e));
-    }
-    res.json({ enqueued: true, site, novelKey, started: !alreadyRunning });
+    // その作品だけを処理する(全体サイクルは起動しない)。実行中ならキューへの追加のみ(合流)
+    const started = s.triggerNovel(site, novelKey);
+    res.json({ enqueued: true, site, novelKey, started });
   });
 
   /**

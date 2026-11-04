@@ -145,17 +145,21 @@ export class BackupRepository {
     });
   }
 
-  getNextTask(): BackupTask | null {
+  /** 次の pending タスク。targets 指定時はその作品のタスクだけを対象にする(他作品は pending のまま残る)。 */
+  getNextTask(targets?: ReadonlyArray<{ site: SiteId; novelKey: string }>): BackupTask | null {
+    if (targets && targets.length === 0) return null;
+    const filter = targets ? ` AND (${targets.map(() => "(site = ? AND novel_key = ?)").join(" OR ")})` : "";
+    const params = targets ? targets.flatMap((t) => [t.site, t.novelKey]) : [];
     const result = this.db
       .prepare(
         `SELECT id, site, novel_key, task_type, status, scheduled_at, started_at, 
                 completed_at, error_message, retry_count, max_retries, priority, created_at
          FROM backup_tasks
-         WHERE status = 'pending'
+         WHERE status = 'pending'${filter}
          ORDER BY priority DESC, scheduled_at ASC
          LIMIT 1`
       )
-      .get() as any;
+      .get(...params) as any;
 
     return result
       ? {

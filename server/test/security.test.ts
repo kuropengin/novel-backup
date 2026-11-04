@@ -17,6 +17,7 @@ function mockScheduler(running = false) {
   return {
     enqueueNovel: vi.fn(),
     trigger: vi.fn(async () => {}),
+    triggerNovel: vi.fn(() => !running),
     getStatus: vi.fn((): { running: boolean } => ({ running })),
     getConfig: vi.fn(() => ({ frequency: "daily", time: "03:00", maxParallel: 3 })),
     updateConfig: vi.fn(),
@@ -46,12 +47,13 @@ describe("per-novel trigger", () => {
     expect((await admin.post("/api/backup/novels/foo/123/trigger").send({})).status).toBe(400);
     expect((await admin.post("/api/backup/novels/narou/abc/trigger").send({})).status).toBe(400);
     expect((await admin.post("/api/backup/novels/hameln/12ab/trigger").send({})).status).toBe(400);
-    expect(sch.enqueueNovel).not.toHaveBeenCalled();
+    expect(sch.triggerNovel).not.toHaveBeenCalled();
     const ok = await admin.post("/api/backup/novels/narou/N1234AB/trigger").send({});
     expect(ok.status).toBe(200);
     expect(ok.body).toMatchObject({ enqueued: true, site: "narou", novelKey: "n1234ab" });
-    expect(sch.enqueueNovel).toHaveBeenCalledWith("narou", ["n1234ab"], 100);
-    expect(sch.trigger).toHaveBeenCalledTimes(1);
+    expect(ok.body.started).toBe(true);
+    expect(sch.triggerNovel).toHaveBeenCalledWith("narou", "n1234ab");
+    expect(sch.trigger).not.toHaveBeenCalled(); // 全体サイクルは起動しない
   });
 
   it("does not start a new cycle while one is running", async () => {
@@ -60,7 +62,8 @@ describe("per-novel trigger", () => {
     const admin = await makeAdmin(app);
     const r = await admin.post("/api/backup/novels/hameln/123/trigger").send({});
     expect(r.status).toBe(200);
-    expect(sch.enqueueNovel).toHaveBeenCalled();
+    expect(r.body.started).toBe(false);
+    expect(sch.triggerNovel).toHaveBeenCalled();
     expect(sch.trigger).not.toHaveBeenCalled();
   });
 
@@ -91,7 +94,7 @@ describe("enqueue", () => {
     expect((await post({ site: "narou", novelKeys: ["bad"] })).status).toBe(400);
     expect((await post({ site: "hameln", novelKeys: Array(201).fill("1") })).status).toBe(400);
     expect((await post({ site: "hameln", novelKeys: ["1"], priority: 1000 })).status).toBe(400);
-    expect(sch.enqueueNovel).not.toHaveBeenCalled();
+    expect(sch.triggerNovel).not.toHaveBeenCalled();
     const ok = await post({ site: "narou", novelKeys: ["N1234AB", "n1234ab"] });
     expect(ok.status).toBe(200);
     expect(ok.body.count).toBe(1);
