@@ -22,18 +22,20 @@
 | `SCRAPLING_AUTO_UPDATE` | `true` | scrapling の日次自動更新。`false` で無効(無効時は更新済みの overlay も使わず、インストール済みの版だけで動く) |
 | `SCRAPLING_UPDATE_TIME` | `04:00` | 更新確認の時刻 `HH:mm`(プロセスの `TZ`)。不正な値は警告して `04:00` |
 | `SCRAPLING_PROXY` | なし | スクレイパー HTTP 通信に使う固定 proxy URL。サイト側でサーバー IP が 403 になる場合の回避に使う |
+| `SCRAPLING_STEALTHY_HEADERS` | `true` | Scrapling の自動ヘッダー生成。`false` にすると挙動比較ができる(調査用) |
 
 ## scrapling の自動更新
 
 サイトやライブラリの変更に追従するため、サーバー稼働中は毎日 `SCRAPLING_UPDATE_TIME` に PyPI の最新 scrapling を確認し、新しければ更新する(ログ接頭辞 `[PythonUpdater]`、`from -> to` を出力)。バックアップやサーバーの動作には影響しない(失敗してもログのみ。通知は出さない)。
 
 - ホストのスリープ/一時停止から復帰した直後に出る `node-cron` の `missed execution` 警告は抑制している(処理自体の挙動は変わらない)。
+- 起動時に `[Boot] Versions:` として `node` / `python(image)` / `scrapling(image)` / `python(scraper)` / `scrapling(scraper)` / `overlay` を出力する。環境差の調査に使う。
 
 - 更新先は `DATA_DIR/python/venvs/v<版>-<時刻>/`(venv)。`DATA_DIR/python/state.json` の `active` が使用中、`previous` が 1 つ前。
 - 手順: 最新版確認(同じか古ければ何もしない) → 新しい venv に wheel のみ(`--only-binary :all:`)で `scrapling[fetchers]==<版>` と `requirements.txt` の下限指定を導入 → `scrape_with_scrapling.py --self-test`(ネットワークなし、固定 HTML を実際の抽出関数で解析) → `state.json` をアトミックに置換 → 2 世代より古い venv を削除。
 - どこかで失敗したら現行を維持し、試行ディレクトリを削除してログに残す。同じ版での失敗は 7 日間(または新しい版が出るまで)再試行しない。pip は 10 分でタイムアウト、更新の同時実行は 1 つだけ。
 - 各スクレイプ呼び出しは spawn 時に `active` を読むため、切り替え後の新規呼び出しから新版になり、実行中の呼び出しは旧版のまま完了する。旧版は `previous` として残る。
-- `syosetu.org`(ハーメルン)は環境によって 403 になることがあるため、同一オリジン referer と impersonate 無効化のフォールバックを段階的に試す。失敗時は `attempts: ...` を含むログを返す。
+- `ncode.syosetu.com`(なろう) / `syosetu.org`(ハーメルン) / `kakuyomu.jp`(カクヨム) は環境によって 403 になることがあるため、同一オリジン referer と impersonate 無効化のフォールバックを段階的に試す。失敗時は `attempts: ...` を含むログを返す。
 - なぜ venv か: scrapling は lxml / orjson / curl_cffi などコンパイル済みの依存を持つ。`pip --target` + `PYTHONPATH` だとイメージ側の site-packages と混ざり、版の組み合わせが不整合になりうる。venv は依存一式が 1 か所で解決され、Python のマイナーバージョン違いも検知できる。
 - 起動時の整合: (1) overlay の scrapling がイメージ同梱の版**以下**なら破棄する(`requirements.txt` を上げて再ビルドしたら、古い overlay が新しいイメージを上書きしない)。(2) Python のマイナーバージョンがイメージと違う overlay は破棄する(再ビルドで 3.12 → 3.13 になった場合など)。(3) active の self-test に失敗したら previous に戻し、それも駄目ならイメージの版に戻す。
 - `requirements.txt` はイメージの基準(フォールバック)のまま。手動で戻したいときは `SCRAPLING_AUTO_UPDATE=false` にするか `DATA_DIR/python` を削除する。

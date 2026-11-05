@@ -119,20 +119,26 @@ def _base_fetch_kwargs() -> dict:
     return kwargs
 
 
+def _is_site_host_with_fallback(host: str) -> bool:
+    return host.endswith("syosetu.org") or host.endswith("syosetu.com") or host.endswith("kakuyomu.jp")
+
+
 def get_tree(url: str):
-    host = (urlparse(url).hostname or "").lower()
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
     base_kwargs = _base_fetch_kwargs()
 
-    # syosetu.org は環境によって 403 になることがあるため、段階的に取得条件を変えて再試行する
+    # 対象サイトは環境によって 403 になることがあるため、段階的に取得条件を変えて再試行する
     attempts = [("default", base_kwargs)]
-    if host.endswith("syosetu.org"):
+    if _is_site_host_with_fallback(host):
+        origin = f"{parsed.scheme or 'https'}://{host}/"
         attempts.extend([
             (
                 "same-origin-ref",
                 {
                     **base_kwargs,
                     "headers": {
-                        "referer": "https://syosetu.org/",
+                        "referer": origin,
                         "accept-language": "ja,en-US;q=0.9,en;q=0.8",
                     },
                 },
@@ -143,7 +149,7 @@ def get_tree(url: str):
                     **base_kwargs,
                     "impersonate": None,
                     "headers": {
-                        "referer": "https://syosetu.org/",
+                        "referer": origin,
                         "accept-language": "ja,en-US;q=0.9,en;q=0.8",
                     },
                 },

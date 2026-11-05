@@ -4,7 +4,7 @@ import { loadConfig } from "./config.js";
 import { cleanupExpiredSessions } from "./auth/session.js";
 import { openDb } from "./db/index.js";
 import { initBackupSystem, shutdownBackupSystem, presets } from "./backup/index.js";
-import { initPythonUpdater, type PythonUpdater } from "./backup/pythonUpdater.js";
+import { createRealDeps, initPythonUpdater, resolveScraperPython, type PythonUpdater } from "./backup/pythonUpdater.js";
 import { readBackupScheduleSettings } from "./backup/settings.js";
 
 export type { AppContext };
@@ -51,6 +51,17 @@ const server = app.listen(config.port, config.host, async (err?: Error) => {
     pythonBin: config.backupPythonBin,
     time: config.scraplingUpdateTime,
   });
+  try {
+    const image = await createRealDeps(config.backupPythonBin).probeBaseline();
+    const scraperPython = resolveScraperPython(config.backupPythonBin);
+    const runtime = await createRealDeps(scraperPython).selfTest(scraperPython);
+    const activeOverlay = pythonUpdater?.readState().active?.version ?? "none";
+    console.log(
+      `[Boot] Versions: node=${process.version}, python(image)=${image.pythonMinor}, scrapling(image)=${image.version ?? "none"}, python(scraper)=${runtime.python}, scrapling(scraper)=${runtime.scrapling}, overlay=${activeOverlay}`
+    );
+  } catch (e) {
+    console.warn("[Boot] Version probe failed:", e);
+  }
   initBackupSystem(db, {
     ...backupPreset,
     frequency: persistedSchedule.frequency,
