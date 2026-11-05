@@ -393,6 +393,9 @@ export class PythonUpdater {
     const expr = `${mm} ${hh} * * *`;
     this.job = cron.schedule(expr, () => {
       void this.runUpdate();
+    }, {
+      // ホスト復帰直後の missed execution 警告でログが埋まるのを防ぐ
+      suppressMissedWarning: true,
     });
     console.log(`${LOG} daily update scheduled at ${time} (${expr})`);
   }

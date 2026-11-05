@@ -38,14 +38,22 @@ export class BackupScheduler {
     const cronExpression = this._getCronExpression();
     console.log(`[Scheduler] Starting backup scheduler: ${this.config.frequency} (${cronExpression})`);
 
-    this.cronJob = cron.schedule(cronExpression, async () => {
-      console.log("[Scheduler] Backup cycle triggered");
-      try {
-        await this.manager.runBackupCycle();
-      } catch (error) {
-        console.error("[Scheduler] Backup cycle failed:", error);
+    this.cronJob = cron.schedule(
+      cronExpression,
+      async () => {
+        console.log("[Scheduler] Backup cycle triggered");
+        try {
+          await this.manager.runBackupCycle();
+        } catch (error) {
+          console.error("[Scheduler] Backup cycle failed:", error);
+        }
+      },
+      {
+        ...(this.config.timezone ? { timezone: this.config.timezone } : {}),
+        // コンテナの一時停止/復帰などで大量の missed execution 警告が出るのを抑える
+        suppressMissedWarning: true,
       }
-    }, this.config.timezone ? { timezone: this.config.timezone } : undefined);
+    );
   }
 
   /**

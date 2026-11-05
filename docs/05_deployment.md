@@ -26,6 +26,8 @@
 
 サイトやライブラリの変更に追従するため、サーバー稼働中は毎日 `SCRAPLING_UPDATE_TIME` に PyPI の最新 scrapling を確認し、新しければ更新する(ログ接頭辞 `[PythonUpdater]`、`from -> to` を出力)。バックアップやサーバーの動作には影響しない(失敗してもログのみ。通知は出さない)。
 
+- ホストのスリープ/一時停止から復帰した直後に出る `node-cron` の `missed execution` 警告は抑制している(処理自体の挙動は変わらない)。
+
 - 更新先は `DATA_DIR/python/venvs/v<版>-<時刻>/`(venv)。`DATA_DIR/python/state.json` の `active` が使用中、`previous` が 1 つ前。
 - 手順: 最新版確認(同じか古ければ何もしない) → 新しい venv に wheel のみ(`--only-binary :all:`)で `scrapling[fetchers]==<版>` と `requirements.txt` の下限指定を導入 → `scrape_with_scrapling.py --self-test`(ネットワークなし、固定 HTML を実際の抽出関数で解析) → `state.json` をアトミックに置換 → 2 世代より古い venv を削除。
 - どこかで失敗したら現行を維持し、試行ディレクトリを削除してログに残す。同じ版での失敗は 7 日間(または新しい版が出るまで)再試行しない。pip は 10 分でタイムアウト、更新の同時実行は 1 つだけ。
