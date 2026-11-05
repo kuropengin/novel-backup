@@ -70,7 +70,6 @@ export interface BackupConfig {
   maxRetries: number;
   backupScopes: readonly TaskType[];
   pythonBin: string;
-  maxContentFetchPerNovel: number;
   checkInterval: number; // ms
 }
 

@@ -14,13 +14,13 @@ const CONFIG: BackupConfig = {
   maxRetries: 3,
   backupScopes: ["metadata", "content"],
   pythonBin: "python",
-  maxContentFetchPerNovel: 50,
   checkInterval: 1000,
 };
 
 /** ネットワークを使わないスクレイパー。作品ごとの話一覧と本文を差し替えられる。 */
 class FakeScraper extends BaseScraper {
   listCalls: string[] = [];
+  contentCalls: string[] = [];
   episodes = new Map<string, string[]>(); // novelKey -> episodeKeys
   bodies = new Map<string, string>(); // `${novelKey}/${episodeKey}` -> body
   updatedAt = new Map<string, string>(); // `${novelKey}/${episodeKey}` -> updatedAt
@@ -41,6 +41,7 @@ class FakeScraper extends BaseScraper {
     }));
   }
   async scrapeEpisodeContent(novelKey: string, episodeKey: string): Promise<EpisodeContent> {
+    this.contentCalls.push(episodeKey);
     return {
       title: `第${episodeKey}話`,
       bodyHtml: this.bodies.get(`${novelKey}/${episodeKey}`) ?? `<p>${novelKey}-${episodeKey}</p>`,
@@ -109,6 +110,58 @@ describe("single-novel backup", () => {
     await manager.runBackupCycle(); // 実行中なので保留される
     await vi.waitFor(() => expect(scraper.listCalls.filter((k) => k === "b").length).toBe(1), { timeout: 5000 });
     await vi.waitFor(() => expect(manager.isBusy()).toBe(false), { timeout: 5000 });
+  });
+});
+
+describe("episode content fetching", () => {
+  const manyEpisodes = (n: number) => Array.from({ length: n }, (_, i) => String(i + 1));
+  const savedCount = (db: Db) => (db.prepare(`SELECT COUNT(DISTINCT episode_id) AS c FROM episode_versions`).get() as { c: number }).c;
+
+  it("fetches every episode of a long novel, oldest first", async () => {
+    const { manager, scraper, db } = setup(["a"]);
+    scraper.episodes.set("a", manyEpisodes(120));
+
+    await manager.runNovelBackup("narou", "a");
+
+    expect(scraper.contentCalls).toEqual(manyEpisodes(120));
+    expect(savedCount(db)).toBe(120);
+  });
+
+  it("a failing episode does not block later ones, and the retry fetches only what is missing", async () => {
+    const { manager, scraper, db, taskStatus } = setup(["a"]);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    scraper.episodes.set("a", manyEpisodes(5));
+    const original = scraper.scrapeEpisodeContent.bind(scraper);
+    let failures = 1;
+    scraper.scrapeEpisodeContent = async (novelKey, episodeKey) => {
+      if (episodeKey === "2" && failures-- > 0) throw new Error("boom");
+      return original(novelKey, episodeKey);
+    };
+
+    await manager.runNovelBackup("narou", "a");
+
+    expect(scraper.contentCalls).toEqual(["1", "3", "4", "5", "2"]);
+    expect(savedCount(db)).toBe(5);
+    expect(taskStatus("a")).toBe("completed");
+  });
+
+  it("stops requesting after consecutive failures and reports the task as failed", async () => {
+    const { manager, scraper, db, taskStatus } = setup(["a"]);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    scraper.episodes.set("a", manyEpisodes(20));
+    let calls = 0;
+    scraper.scrapeEpisodeContent = async () => {
+      calls++;
+      throw new Error("HTTP 403");
+    };
+
+    await manager.runNovelBackup("narou", "a");
+
+    expect(calls).toBe(5 * CONFIG.maxRetries);
+    expect(savedCount(db)).toBe(0);
+    expect(taskStatus("a")).toBe("failed");
+    const task = db.prepare(`SELECT error_message FROM backup_tasks`).get() as { error_message: string };
+    expect(task.error_message).toContain("HTTP 403");
   });
 });
 

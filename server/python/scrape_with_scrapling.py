@@ -3,10 +3,15 @@ import json
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from lxml import html
 from scrapling import Fetcher
+
+
+# 目次のページ送りの間隔(秒)。サーバー側のレート制限と同程度に保つ
+TOC_PAGE_INTERVAL_SEC = 2.0
 
 
 @dataclass
@@ -204,39 +209,51 @@ def scrape_narou_metadata(novel_key: str):
 
 
 def scrape_narou_episodes(novel_key: str):
-    tree, _ = get_tree(f"https://ncode.syosetu.com/{novel_key}/")
-    links = tree.xpath("//a[contains(@class,'subtitle')]")
     episodes: list[Episode] = []
-    for idx, link in enumerate(links, 1):
-        href = first_attr(link, ["./@href"])
-        title = first_text(link, ["."])
-        if not href or not title:
-            continue
-        episode_key = href.strip("/").split("/")[-1]
-        row = link.getparent()
-        published_at = ""
-        updated_at = ""
-        if row is not None:
-            # 新: div.p-eplist__update に「公開日時」テキスト + <span title="... 改稿">
-            # 旧: span[class*=update] の title 属性
-            upd = row.xpath(".//div[contains(@class,'p-eplist__update')]")
-            if upd:
-                published_at = (upd[0].text or "").strip()
-                updated_at = first_attr(upd[0], [".//span/@title"]).replace("改稿", "").strip()
-            else:
-                updated_at = first_attr(row, [".//span[contains(@class,'update')]//@title"])
-        published_at = published_at or updated_at
-        updated_at = updated_at or published_at
-        episodes.append(
-            Episode(
-                episode_key=episode_key,
-                position=idx,
-                title=title,
-                chapter=None,
-                published_at=published_at,
-                updated_at=updated_at,
+    seen: set[str] = set()
+    # 目次は 1 ページ 100 話。「次へ」が無くなるまで辿る(途中のページで失敗したら全体を失敗させる)
+    url: str | None = f"https://ncode.syosetu.com/{novel_key}/"
+    visited: set[str] = set()
+    while url and url not in visited:
+        visited.add(url)
+        tree, _ = get_tree(url)
+        for link in tree.xpath("//a[contains(@class,'subtitle')]"):
+            href = first_attr(link, ["./@href"])
+            title = first_text(link, ["."])
+            if not href or not title:
+                continue
+            episode_key = href.strip("/").split("/")[-1]
+            if episode_key in seen:
+                continue
+            seen.add(episode_key)
+            row = link.getparent()
+            published_at = ""
+            updated_at = ""
+            if row is not None:
+                # 新: div.p-eplist__update に「公開日時」テキスト + <span title="... 改稿">
+                # 旧: span[class*=update] の title 属性
+                upd = row.xpath(".//div[contains(@class,'p-eplist__update')]")
+                if upd:
+                    published_at = (upd[0].text or "").strip()
+                    updated_at = first_attr(upd[0], [".//span/@title"]).replace("改稿", "").strip()
+                else:
+                    updated_at = first_attr(row, [".//span[contains(@class,'update')]//@title"])
+            published_at = published_at or updated_at
+            updated_at = updated_at or published_at
+            episodes.append(
+                Episode(
+                    episode_key=episode_key,
+                    position=len(episodes) + 1,
+                    title=title,
+                    chapter=None,
+                    published_at=published_at,
+                    updated_at=updated_at,
+                )
             )
-        )
+        next_href = first_attr(tree, ["//a[contains(@class,'c-pager__item--next')]/@href"])
+        url = urljoin(url, next_href) if next_href else None
+        if url:
+            time.sleep(TOC_PAGE_INTERVAL_SEC)
     return [e.__dict__ for e in episodes]
 
 
@@ -476,7 +493,8 @@ def scrape_kakuyomu_episodes(novel_key: str):
 
 def scrape_kakuyomu_content(novel_key: str, episode_key: str):
     tree, _ = get_tree(f"https://kakuyomu.jp/works/{novel_key}/episodes/{episode_key}")
-    title = first_text(tree, ["//h1", "//p[contains(@class,'widget-episodeTitle')]"])
+    # 本文ページの h1 は作品名。話タイトルは p.widget-episodeTitle
+    title = first_text(tree, ["//p[contains(@class,'widget-episodeTitle')]"])
     body = first_block(
         tree,
         [

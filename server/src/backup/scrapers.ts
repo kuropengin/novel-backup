@@ -33,6 +33,8 @@ const pythonScript = path.resolve(here, "../../python/scrape_with_scrapling.py")
 
 /** Python ブリッジ 1 回の呼び出しの上限時間 */
 const PYTHON_TIMEOUT_MS = 120_000;
+/** 話一覧は目次を複数ページ辿ることがあるため長めにする */
+const PYTHON_EPISODES_TIMEOUT_MS = 600_000;
 
 function parseJsonFromStdout<T>(stdout: string): PythonResponse<T> {
   const lines = stdout
@@ -70,19 +72,23 @@ async function runPython<T>(
 
   let stdout = "";
   let stderr = "";
-  child.stdout.on("data", (chunk: Buffer) => {
-    stdout += chunk.toString();
+  // setEncoding でチャンク境界をまたぐマルチバイト文字の分断(文字化け)を防ぐ
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
   });
-  child.stderr.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString();
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
   });
 
   // 応答しない Python が残り続けないよう、一定時間で強制終了して reject する
+  const timeoutMs = operation === "episodes" ? PYTHON_EPISODES_TIMEOUT_MS : PYTHON_TIMEOUT_MS;
   const exitCode = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      reject(new Error(`[Scrapling] timeout after ${PYTHON_TIMEOUT_MS / 1000}s (${operation} ${site}/${novelKey})`));
-    }, PYTHON_TIMEOUT_MS);
+      reject(new Error(`[Scrapling] timeout after ${timeoutMs / 1000}s (${operation} ${site}/${novelKey})`));
+    }, timeoutMs);
     child.on("error", (e) => {
       clearTimeout(timer);
       reject(e);

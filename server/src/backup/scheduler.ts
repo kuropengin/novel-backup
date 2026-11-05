@@ -168,7 +168,6 @@ export const presets = {
     maxRetries: 3,
     backupScopes: ["metadata"] as const,
     pythonBin: "python",
-    maxContentFetchPerNovel: 0,
     checkInterval: 30000,
     time: "02:00",
   },
@@ -183,7 +182,6 @@ export const presets = {
     maxRetries: 3,
     backupScopes: ["metadata", "content"] as const,
     pythonBin: "python",
-    maxContentFetchPerNovel: 50,
     checkInterval: 60000,
     time: "03:00",
   },
@@ -198,7 +196,6 @@ export const presets = {
     maxRetries: 3,
     backupScopes: ["metadata", "content"] as const,
     pythonBin: "python",
-    maxContentFetchPerNovel: 50,
     checkInterval: 120000,
   },
 };

@@ -66,4 +66,26 @@ describe("migrations", () => {
     expect(db.prepare("SELECT title FROM novels").all()).toEqual([{ title: "T" }]);
     expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(migrations.length);
   });
+
+  it("v15 replaces kakuyomu version titles (work title) with the episode title and leaves other sites alone", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(migrations.slice(0, 14).join("\n"));
+    db.exec("PRAGMA user_version = 14");
+    db.exec(`
+      INSERT INTO novels (id, site, novel_key, title, url, created_at) VALUES
+        (1, 'kakuyomu', '111', '作品名', 'u', 't'),
+        (2, 'narou', 'n1', '作品名', 'u', 't');
+      INSERT INTO episodes (id, novel_id, episode_key, position, title, created_at) VALUES
+        (1, 1, '11', 1, '第1話', 't'),
+        (2, 2, '1', 1, '一覧の題', 't');
+      INSERT INTO episode_versions (episode_id, version, content_hash, title, body_html, fetched_at) VALUES
+        (1, 1, 'h', '作品名', 'b', 't'),
+        (2, 1, 'h', '本文側の題', 'b', 't');
+    `);
+    runMigrations(db);
+    expect(db.prepare("SELECT title FROM episode_versions ORDER BY episode_id").all()).toEqual([
+      { title: "第1話" },
+      { title: "本文側の題" },
+    ]);
+  });
 });

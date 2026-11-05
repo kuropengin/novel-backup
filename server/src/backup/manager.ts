@@ -9,6 +9,9 @@ import { createScraper, BaseScraper } from "./scrapers.js";
 
 type RunCounter = { processed: number; failed: number; total: number };
 
+/** 本文取得がこの回数続けて失敗したら、サイト側の問題とみなしてその作品の残りを打ち切る */
+const MAX_CONSECUTIVE_CONTENT_FAILURES = 5;
+
 export class BackupManager {
   private repository: BackupRepository;
   private notificationRepository: NotificationRepository;
@@ -204,13 +207,11 @@ export class BackupManager {
         if (task.taskType !== "metadata" && this.config.backupScopes.includes("content")) {
           const scraper = this.scrapers.get(task.site);
           if (!scraper) throw new Error(`No scraper for site: ${task.site}`);
-          const targets = this.repository.pickContentFetchTargets(
-            task.site,
-            task.novelKey,
-            result.episodes,
-            this.config.maxContentFetchPerNovel
-          );
+          const targets = this.repository.pickContentFetchTargets(task.site, task.novelKey, result.episodes);
           let savedContentCount = 0;
+          let failedContentCount = 0;
+          let consecutiveFailures = 0;
+          let firstContentError = "";
           if (targets.length > 0) {
             this.emitProgress({
               runId,
@@ -226,19 +227,33 @@ export class BackupManager {
           }
           for (const episode of targets) {
             await this.waitForRequestWindow();
-            const content = await scraper.scrapeEpisodeContent(task.novelKey, episode.episodeKey);
-            const r = this.repository.saveEpisodeContent(
-              task.site,
-              task.novelKey,
-              episode.episodeKey,
-              content,
-              episode.updatedAt
-            );
-            if (r.saved) savedContentCount++;
-            if (r.revised) revisedEpisodes++;
+            // 1 話の失敗で後続の話を止めない(取得できなかった話はリトライと次回サイクルで再取得される)
+            try {
+              const content = await scraper.scrapeEpisodeContent(task.novelKey, episode.episodeKey);
+              const r = this.repository.saveEpisodeContent(
+                task.site,
+                task.novelKey,
+                episode.episodeKey,
+                content,
+                episode.updatedAt
+              );
+              if (r.saved) savedContentCount++;
+              if (r.revised) revisedEpisodes++;
+              consecutiveFailures = 0;
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              console.error(`[Backup] Content failed for ${task.site}/${task.novelKey}/${episode.episodeKey}: ${message}`);
+              firstContentError ||= message;
+              failedContentCount++;
+              consecutiveFailures++;
+              if (consecutiveFailures >= MAX_CONSECUTIVE_CONTENT_FAILURES) break;
+            }
           }
           if (targets.length > 0) {
             console.log(`[Backup] Saved ${savedContentCount}/${targets.length} updated episodes for ${task.novelKey}`);
+          }
+          if (failedContentCount > 0) {
+            throw new Error(`本文取得に失敗 (${failedContentCount}/${targets.length}話): ${firstContentError}`);
           }
         }
       }

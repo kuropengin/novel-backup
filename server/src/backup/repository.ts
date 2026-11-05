@@ -383,8 +383,9 @@ export class BackupRepository {
     });
   }
 
-  pickContentFetchTargets(site: SiteId, novelKey: string, episodes: Episode[], maxFetch: number): Episode[] {
-    if (maxFetch <= 0 || episodes.length === 0) return [];
+  /** 本文の取得が必要な話を話一覧の順(古い話から)で返す。中断しても次回は欠けた話から再開される */
+  pickContentFetchTargets(site: SiteId, novelKey: string, episodes: Episode[]): Episode[] {
+    if (episodes.length === 0) return [];
     const rows = this.db
       .prepare(
         `SELECT ep.episode_key,
@@ -431,7 +432,7 @@ export class BackupRepository {
       if (currentUpdated && currentUpdated !== lastFetchedUpdated) targets.push(ep);
     }
 
-    return targets.slice(-Math.min(maxFetch, targets.length));
+    return targets;
   }
 
   listLatestEpisodeContents(site: SiteId, novelKey: string): Array<{

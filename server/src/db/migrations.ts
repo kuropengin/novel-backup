@@ -328,6 +328,12 @@ CREATE TABLE IF NOT EXISTS user_blocklists (
 );
 CREATE INDEX IF NOT EXISTS idx_user_blocklists_user ON user_blocklists(user_id);
 `,
+  // 15: カクヨムの本文保存時に話タイトルではなく作品名(h1)を保存していた不具合の救済。
+  //     本文が変わらないと再保存されないため、話一覧のタイトルで補正する
+  `
+UPDATE episode_versions SET title = (SELECT e.title FROM episodes e WHERE e.id = episode_versions.episode_id)
+WHERE episode_id IN (SELECT e.id FROM episodes e JOIN novels n ON n.id = e.novel_id WHERE n.site = 'kakuyomu');
+`,
 ];
 
 export function runMigrations(db: DatabaseSync): void {
