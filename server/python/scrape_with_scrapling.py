@@ -1,8 +1,10 @@
 import argparse
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
+from urllib.parse import urlparse
 from lxml import html
 from scrapling import Fetcher
 
@@ -100,11 +102,72 @@ def first_block(tree, xpaths: list[str]) -> str:
     return ""
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _base_fetch_kwargs() -> dict:
+    kwargs: dict = {
+        "stealthy_headers": _env_bool("SCRAPLING_STEALTHY_HEADERS", True),
+    }
+    proxy = (os.getenv("SCRAPLING_PROXY") or "").strip()
+    if proxy:
+        kwargs["proxy"] = proxy
+    return kwargs
+
+
 def get_tree(url: str):
-    response = Fetcher.get(url)
-    if response.status >= 400:
-        raise RuntimeError(f"HTTP {response.status}: {url}")
-    return html.fromstring(response.body), str(response.url)
+    host = (urlparse(url).hostname or "").lower()
+    base_kwargs = _base_fetch_kwargs()
+
+    # syosetu.org は環境によって 403 になることがあるため、段階的に取得条件を変えて再試行する
+    attempts = [("default", base_kwargs)]
+    if host.endswith("syosetu.org"):
+        attempts.extend([
+            (
+                "same-origin-ref",
+                {
+                    **base_kwargs,
+                    "headers": {
+                        "referer": "https://syosetu.org/",
+                        "accept-language": "ja,en-US;q=0.9,en;q=0.8",
+                    },
+                },
+            ),
+            (
+                "same-origin-ref-no-impersonate",
+                {
+                    **base_kwargs,
+                    "impersonate": None,
+                    "headers": {
+                        "referer": "https://syosetu.org/",
+                        "accept-language": "ja,en-US;q=0.9,en;q=0.8",
+                    },
+                },
+            ),
+        ])
+
+    traces: list[str] = []
+    last_error: str | None = None
+    for label, kwargs in attempts:
+        try:
+            response = Fetcher.get(url, **kwargs)
+        except Exception as exc:
+            last_error = str(exc)
+            traces.append(f"{label}:error")
+            continue
+        traces.append(f"{label}:{response.status}")
+        if response.status < 400:
+            return html.fromstring(response.body), str(response.url)
+        last_error = f"HTTP {response.status}"
+
+    detail = ", ".join(traces)
+    if last_error:
+        raise RuntimeError(f"{last_error}: {url} (attempts: {detail})")
+    raise RuntimeError(f"failed to fetch: {url}")
 
 
 def scrape_narou_metadata(novel_key: str):
