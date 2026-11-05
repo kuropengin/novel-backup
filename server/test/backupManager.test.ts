@@ -88,9 +88,26 @@ describe("single-novel backup", () => {
   });
 
   it("a full cycle still processes every tracked novel", async () => {
-    const { manager, scraper } = setup(["a", "b", "c"]);
+    const { manager, scraper, user, bookmark } = setup(["a", "b", "c"]);
+    const u = user("u");
+    for (const k of ["a", "b", "c"]) bookmark(u, k);
     await manager.runBackupCycle();
     expect([...scraper.listCalls].sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("a full cycle skips novels nobody has bookmarked and keeps their data", async () => {
+    const { manager, scraper, user, bookmark, db } = setup(["a", "b"]);
+    bookmark(user("u"), "a");
+    await manager.runNovelBackup("narou", "b");
+    scraper.listCalls.length = 0;
+
+    await manager.runBackupCycle();
+
+    expect(scraper.listCalls).toEqual(["a"]);
+    const kept = db.prepare(
+      `SELECT COUNT(*) AS c FROM episode_versions v JOIN episodes e ON e.id = v.episode_id JOIN novels n ON n.id = e.novel_id WHERE n.novel_key = 'b'`
+    ).get() as { c: number };
+    expect(kept.c).toBe(2);
   });
 
   it("scheduler.triggerNovel reports started and joins a running single-novel run", async () => {
@@ -105,7 +122,8 @@ describe("single-novel backup", () => {
   });
 
   it("a cycle requested during a single-novel run is deferred, not lost", async () => {
-    const { scheduler, manager, scraper } = setup(["a", "b"]);
+    const { scheduler, manager, scraper, user, bookmark } = setup(["a", "b"]);
+    bookmark(user("u"), "b");
     scheduler.triggerNovel("narou", "a");
     await manager.runBackupCycle(); // 実行中なので保留される
     await vi.waitFor(() => expect(scraper.listCalls.filter((k) => k === "b").length).toBe(1), { timeout: 5000 });

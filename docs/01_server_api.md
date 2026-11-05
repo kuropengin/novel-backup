@@ -55,7 +55,7 @@ server/src/
 | `GET /lookup?url=` | `{ bookmarked, bookmarkId }`。話ページ URL でも作品で判定。作品/話ページ以外は `{ false, null }`。`url` 無しは 400 |
 | `POST /` | `{ url, title, author? }` または `{ site, novelKey, title, author? }`。**`title` 必須**(アプリが表示中のページから取得して送る)。サーバーはサイトへアクセスしない。`url` は `resolveUrl` で作品に解決(話ページ URL も可)。作成 `201 { bookmark, created: true }`、登録済み `200 { bookmark, created: false }`(既存作品のタイトル/著者が空のときのみ補完)。作品/話ページでない URL は `400 not_a_novel_page` |
 | `PATCH /:id` | `{ note?, title?, lastReadEpisodeKey? }`(`title` は共有の作品タイトルを更新) |
-| `DELETE /:id` | 削除(作品行は残る) |
+| `DELETE /:id` | 削除。作品行と保存済みの話・本文は残る。誰のお気に入りでもなくなった作品は定期バックアップの対象から外れ、未実行のタスクも取り消す(再登録で再開) |
 
 ブックマーク DTO: `id, novelId, site, novelKey, title, author, url, note, lastReadEpisodeKey, createdAt`。
 

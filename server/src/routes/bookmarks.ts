@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import type { Db } from "../db/index.js";
-import { nowIso } from "../db/index.js";
+import { nowIso, transaction } from "../db/index.js";
 import { ah, parseBody, sendError } from "../http/errors.js";
 import { isSiteId, novelUrl, resolveUrl, type SiteId } from "../sites.js";
 import { requireAuth } from "../auth/session.js";
@@ -222,8 +222,17 @@ export function bookmarksRouter(db: Db): Router {
   router.delete("/:id", (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) return sendError(res, 404, "not_found");
-    const r = db.prepare("DELETE FROM bookmarks WHERE id = ? AND user_id = ?").run(id, req.user!.id);
-    if (r.changes === 0) return sendError(res, 404, "not_found");
+    const target = getOne(req.user!.id, id);
+    if (!target) return sendError(res, 404, "not_found");
+    transaction(db, () => {
+      db.prepare("DELETE FROM bookmarks WHERE id = ? AND user_id = ?").run(id, req.user!.id);
+      // 誰のお気に入りでもなくなったら、未実行のタスクも取り消す(作品データは残す)
+      db.prepare(
+        `DELETE FROM backup_tasks
+         WHERE site = ? AND novel_key = ? AND status IN ('pending', 'failed')
+           AND NOT EXISTS (SELECT 1 FROM bookmarks WHERE novel_id = ?)`,
+      ).run(target.site, target.novel_key, target.novel_id);
+    });
     res.json({ ok: true });
   });
 

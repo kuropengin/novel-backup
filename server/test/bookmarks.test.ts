@@ -73,6 +73,29 @@ describe("bookmarks API", () => {
     expect((await viewer.get("/api/bookmarks")).body.bookmarks).toHaveLength(1);
   });
 
+  it("delete cancels queued backup tasks only when nobody bookmarks the novel anymore", async () => {
+    const { app, db } = setupApp();
+    const admin = await makeAdmin(app);
+    const viewer = await makeViewer(admin, app);
+    const a = (await admin.post("/api/bookmarks").send({ site: "narou", novelKey: "n1234ab", title: "x" })).body.bookmark;
+    const v = (await viewer.post("/api/bookmarks").send({ site: "narou", novelKey: "n1234ab", title: "x" })).body.bookmark;
+    const insertTask = (status: string) =>
+      db.prepare(
+        `INSERT INTO backup_tasks (site, novel_key, task_type, status, scheduled_at, created_at) VALUES ('narou', 'n1234ab', ?, ?, 't', 't')`,
+      ).run(status === "pending" ? "all" : "metadata", status);
+    const statuses = () =>
+      (db.prepare(`SELECT status FROM backup_tasks ORDER BY status`).all() as unknown as { status: string }[]).map((r) => r.status);
+    insertTask("pending");
+    insertTask("in_progress");
+
+    await admin.delete(`/api/bookmarks/${a.id}`);
+    expect(statuses()).toEqual(["in_progress", "pending"]); // viewer のお気に入りが残っている
+
+    await viewer.delete(`/api/bookmarks/${v.id}`);
+    expect(statuses()).toEqual(["in_progress"]); // 実行中のものには触れない
+    expect((db.prepare("SELECT COUNT(*) AS c FROM novels").get() as unknown as { c: number }).c).toBe(1);
+  });
+
   it("validates input", async () => {
     const { app } = setupApp();
     const a = await makeAdmin(app);

@@ -13,11 +13,13 @@ function cleanAuthor(author: string | null | undefined): string {
 export class BackupRepository {
   constructor(private db: Db) {}
 
+  /** 定期バックアップの対象。誰のお気に入りでもない作品は取得を止める(保存済みのデータは残す) */
   listTrackedNovels(): Array<{ site: SiteId; novelKey: string }> {
     const rows = this.db
       .prepare(
         `SELECT site, novel_key
-         FROM novels
+         FROM novels n
+         WHERE EXISTS (SELECT 1 FROM bookmarks b WHERE b.novel_id = n.id)
          ORDER BY site, novel_key`
       )
       .all() as Array<{ site: SiteId; novel_key: string }>;
