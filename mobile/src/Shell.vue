@@ -393,6 +393,10 @@ function openReader(target: ReaderTarget) {
 function openEpisode(key: string) {
   if (epList.value) openReader({ ...epList.value, episodeKey: key, resume: false });
 }
+/** 一覧の「続きから読む」: 開く話はリーダーが全話と既読状況から決める(一覧は全話を読み込まないため) */
+function resumeFromList() {
+  if (epList.value) openReader({ ...epList.value, episodeKey: undefined, resume: true });
+}
 /** リーダーのメニューから一覧へ。直前の画面が同じ作品の一覧なら戻る */
 function toEpisodeList() {
   menuOpen.value = false;
@@ -538,6 +542,7 @@ onUnmounted(() => {
         :current-key="epList.episodeKey"
         @back="onBack"
         @open="openEpisode"
+        @resume="resumeFromList"
         @unauthorized="emit('unauthorized')"
       />
       <ReaderScreen

@@ -1,32 +1,62 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import Icon from "../components/Icon.vue";
+import LoadMore from "../components/LoadMore.vue";
 import { ApiError, errorMessage } from "../api";
 import type { Settings } from "../storage";
-import { dismiss, markAllRead, markRead, notifications, syncNotifications, unread } from "../stores/notifications";
+import {
+  clearAllNotifications,
+  hasMoreNotifications,
+  loadMoreNotifications,
+  markAllRead,
+  markRead,
+  notifications,
+  syncNotifications,
+  unread,
+} from "../stores/notifications";
 import { confirmNative } from "../native/dialogs";
 import { relativeTime } from "../logic/lists";
 
 const props = defineProps<{ settings: Settings }>();
 const emit = defineEmits<{ (e: "unauthorized"): void }>();
 const error = ref("");
+const loadingMore = ref(false);
+const moreError = ref("");
 
 const cfg = () => ({ serverUrl: props.settings.serverUrl, token: props.settings.token });
+
+function handle(e: unknown, target: typeof error) {
+  if (e instanceof ApiError && e.status === 401) emit("unauthorized");
+  else target.value = errorMessage(e);
+}
 
 onMounted(async () => {
   try {
     await syncNotifications(cfg());
   } catch (e) {
-    if (e instanceof ApiError && e.status === 401) emit("unauthorized");
-    else error.value = errorMessage(e);
+    handle(e, error);
   }
 });
 
+async function more() {
+  if (loadingMore.value) return;
+  loadingMore.value = true;
+  moreError.value = "";
+  try {
+    await loadMoreNotifications(cfg());
+  } catch (e) {
+    handle(e, moreError);
+  } finally {
+    loadingMore.value = false;
+  }
+}
+
 async function clearAll() {
   if (!(await confirmNative("お知らせをすべて削除しますか?", "削除", "削除"))) return;
-  const ids = notifications.value.map((n) => n.id);
-  for (const id of ids) {
-    await dismiss(id, cfg());
+  try {
+    await clearAllNotifications(cfg());
+  } catch (e) {
+    handle(e, error);
   }
 }
 
@@ -34,8 +64,7 @@ async function readOne(id: string) {
   try {
     await markRead(id, cfg());
   } catch (e) {
-    if (e instanceof ApiError && e.status === 401) emit("unauthorized");
-    else error.value = errorMessage(e);
+    handle(e, error);
   }
 }
 
@@ -43,8 +72,7 @@ async function readAll() {
   try {
     await markAllRead(cfg());
   } catch (e) {
-    if (e instanceof ApiError && e.status === 401) emit("unauthorized");
-    else error.value = errorMessage(e);
+    handle(e, error);
   }
 }
 </script>
@@ -72,5 +100,6 @@ async function readAll() {
         <div class="meta">{{ relativeTime(n.createdAt) }}</div>
       </div>
     </button>
+    <LoadMore v-if="notifications.length > 0" :loading="loadingMore" :done="!hasMoreNotifications" :error="moreError" @more="more" />
   </div>
 </template>

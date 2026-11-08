@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import Icon from "../components/Icon.vue";
+import LoadMore from "../components/LoadMore.vue";
 import type { Settings } from "../storage";
-import { ApiError, NetworkError, errorMessage, listBackupEpisodes, type BackupEpisode } from "../api";
+import { ApiError, NetworkError, errorMessage, listEpisodeToc, type TocEpisode } from "../api";
 import type { SiteId } from "../logic/sites";
 import { formatDate } from "../logic/lists";
-import { resumeIndex } from "../logic/readProgress";
 import { getOfflineNovel } from "../stores/offlineLibrary";
 import { loadProgress, setRead } from "../stores/readProgress";
+
+/** 1 回に読み込む話数(スクロールで続きを読む) */
+const PAGE = 20;
 
 const props = defineProps<{
   settings: Settings;
@@ -24,6 +27,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "back"): void;
   (e: "open", episodeKey: string): void;
+  /** 続きから読む(開く話はリーダー側で既読状況から決める) */
+  (e: "resume"): void;
   (e: "unauthorized"): void;
 }>();
 
@@ -35,15 +40,20 @@ interface Row {
 }
 
 const rows = ref<Row[]>([]);
+/** 端末保存データのときは全話を持っておき、表示だけ PAGE 話ずつ増やす */
+let offlineRows: Row[] = [];
+const total = ref(0);
 const loading = ref(true);
+const loadingMore = ref(false);
 const error = ref("");
+const moreError = ref("");
 const source = ref<"offline" | "backup">("backup");
 const readSet = ref<Set<string>>(new Set());
 const lastReadKey = ref<string | null>(null);
 
 const cfg = () => ({ serverUrl: props.settings.serverUrl, token: props.settings.token });
 
-function toRows(list: BackupEpisode[]): Row[] {
+function toRows(list: readonly TocEpisode[]): Row[] {
   return list
     .map((e) => ({ episodeKey: e.episodeKey, position: e.position, title: e.title, dateIso: e.updatedAt ?? e.publishedAt ?? null }))
     .sort((a, b) => a.position - b.position);
@@ -57,9 +67,20 @@ function fmtDateTime(iso: string | null | undefined): string {
   return `${t.getFullYear()}/${t.getMonth() + 1}/${t.getDate()} ${p(t.getHours())}:${p(t.getMinutes())}`;
 }
 
+const done = computed(() => rows.value.length >= total.value);
 const highlightKey = computed(() => props.currentKey ?? lastReadKey.value);
-const readCount = computed(() => rows.value.filter((r) => readSet.value.has(r.episodeKey)).length);
-const resumeLabel = computed(() => (readCount.value === 0 ? "最初から読む" : readCount.value >= rows.value.length ? "最初から読み直す" : "続きから読む"));
+// 未読込の話の既読も数えるため、既読の集合から数える(バックアップに無い話の分は総数で頭打ち)
+const readCount = computed(() =>
+  source.value === "offline" ? offlineRows.filter((r) => readSet.value.has(r.episodeKey)).length : Math.min(readSet.value.size, total.value),
+);
+const resumeLabel = computed(() => (readCount.value === 0 ? "最初から読む" : readCount.value >= total.value ? "最初から読み直す" : "続きから読む"));
+
+function useOffline(list: readonly TocEpisode[]) {
+  offlineRows = toRows(list);
+  total.value = offlineRows.length;
+  rows.value = offlineRows.slice(0, PAGE);
+  source.value = "offline";
+}
 
 async function load() {
   loading.value = true;
@@ -67,18 +88,17 @@ async function load() {
   try {
     const offline = await getOfflineNovel(props.site, props.novelKey);
     if (props.preferOffline && offline && offline.episodes.length > 0) {
-      rows.value = toRows(offline.episodes);
-      source.value = "offline";
+      useOffline(offline.episodes);
     } else {
       try {
-        rows.value = toRows(await listBackupEpisodes(cfg(), props.site, props.novelKey));
+        const page = await listEpisodeToc(cfg(), props.site, props.novelKey, 0, PAGE);
+        rows.value = toRows(page.episodes);
+        total.value = page.total;
         source.value = "backup";
       } catch (e) {
         // 通信できないときは端末保存分で代用する
-        if (e instanceof NetworkError && offline && offline.episodes.length > 0) {
-          rows.value = toRows(offline.episodes);
-          source.value = "offline";
-        } else throw e;
+        if (e instanceof NetworkError && offline && offline.episodes.length > 0) useOffline(offline.episodes);
+        else throw e;
       }
     }
   } catch (e) {
@@ -91,6 +111,27 @@ async function load() {
   await refreshProgress();
 }
 
+async function more() {
+  if (loading.value || loadingMore.value || done.value) return;
+  if (source.value === "offline") {
+    rows.value = offlineRows.slice(0, rows.value.length + PAGE);
+    return;
+  }
+  loadingMore.value = true;
+  moreError.value = "";
+  try {
+    const page = await listEpisodeToc(cfg(), props.site, props.novelKey, rows.value.length, PAGE);
+    const known = new Set(rows.value.map((r) => r.episodeKey));
+    rows.value = [...rows.value, ...toRows(page.episodes).filter((r) => !known.has(r.episodeKey))];
+    total.value = page.total;
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) emit("unauthorized");
+    else moreError.value = errorMessage(e);
+  } finally {
+    loadingMore.value = false;
+  }
+}
+
 async function refreshProgress() {
   try {
     const p = await loadProgress(cfg(), props.site, props.novelKey);
@@ -99,12 +140,6 @@ async function refreshProgress() {
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) emit("unauthorized");
   }
-}
-
-function resume() {
-  const keys = rows.value.map((r) => r.episodeKey);
-  const i = resumeIndex(keys, readSet.value, lastReadKey.value);
-  if (i >= 0) emit("open", keys[i]);
 }
 
 async function toggle(r: Row) {
@@ -135,8 +170,8 @@ onMounted(load);
       <div v-if="author" class="au">{{ author }}</div>
       <div class="muted">バックアップ更新日: {{ fmtDateTime(backupAt) }}</div>
       <div v-if="source === 'offline'" class="muted">端末保存データを表示しています</div>
-      <div v-if="rows.length > 0" class="muted">既読 {{ readCount }} / {{ rows.length }}話</div>
-      <button v-if="rows.length > 0" class="btn accent resume" @click="resume"><Icon name="book" :size="18" />{{ resumeLabel }}</button>
+      <div v-if="total > 0" class="muted">既読 {{ readCount }} / {{ total }}話</div>
+      <button v-if="total > 0" class="btn accent resume" @click="emit('resume')"><Icon name="book" :size="18" />{{ resumeLabel }}</button>
     </div>
 
     <div v-if="loading" class="state">読み込み中...</div>
@@ -164,6 +199,7 @@ onMounted(load);
         <span>{{ readSet.has(r.episodeKey) ? "既読" : "未読" }}</span>
       </button>
     </div>
+    <LoadMore :loading="loadingMore" :done="done" :error="moreError" @more="more" />
     </template>
   </div>
 </template>

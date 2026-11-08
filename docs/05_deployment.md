@@ -131,7 +131,7 @@ novel.example.com {
 | `POST /api/auth/token` | IP(IPv6 は /64)10 回/分 + ユーザー名(小文字)ごとに失敗 5 回で 1 分ロック、以降失敗ごとに倍(上限 15 分)。成功で解除。ロック中は `429 { error: "too_many_requests", retryAfter }` + `Retry-After` |
 | `POST /api/auth/setup` | IP 5 回/分 |
 | `POST /api/auth/password` | ユーザーごと 10 回/15 分 |
-| `POST /api/backup/novels/:site/:novelKey/trigger` | 一般ユーザー 5 回/10 分、管理者 30 回/10 分、全体 30 回/10 分。超過は `429 { error: "rate_limited", retryAfter }` + `Retry-After` |
+| `POST /api/backup/novels/:site/:novelKey/trigger`、`POST /api/backup/bookmarks/trigger` | 一般ユーザー 5 回/10 分、管理者 30 回/10 分、全体 30 回/10 分(両者で共通の枠。まとめて実行は 1 リクエスト = 1 回)。超過は `429 { error: "rate_limited", retryAfter }` + `Retry-After` |
 | `GET /api/backup/progress`(SSE) | ユーザーごと 3 接続、全体 50 接続(超過は 429)。60 秒ごとにトークンを再検証し、失効していれば切断。最大 30 分で切断(クライアントは再接続する) |
 
 - パスワードは bcrypt コスト 12。コストが低い古いハッシュは、ログイン成功時に自動で再ハッシュする。

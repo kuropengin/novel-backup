@@ -61,18 +61,33 @@ export class NotificationRepository {
   /**
    * ユーザーの通知一覧を取得
    */
-  listNotifications(userId: number, limit: number = 50): Notification[] {
+  listNotifications(userId: number, limit: number = 50, offset: number = 0): Notification[] {
     const stmt = this.db.prepare(
       `SELECT id, user_id as userId, type, title, message, novel_key as novelKey, read, created_at as createdAt
        FROM notifications
        WHERE user_id = ?
-       ORDER BY created_at DESC
-       LIMIT ?`
+       ORDER BY created_at DESC, id DESC
+       LIMIT ? OFFSET ?`
     );
-    return (stmt.all(userId, limit) as any[]).map((r) => ({
+    return (stmt.all(userId, limit, offset) as any[]).map((r) => ({
       ...r,
       read: !!r.read,
     }));
+  }
+
+  /** ユーザーの通知の総数 */
+  countNotifications(userId: number): number {
+    return (this.db.prepare(`SELECT COUNT(*) as count FROM notifications WHERE user_id = ?`).get(userId) as { count: number }).count;
+  }
+
+  /** ユーザーの通知をすべて既読にする */
+  markAllAsRead(userId: number): void {
+    this.db.prepare(`UPDATE notifications SET read = 1 WHERE user_id = ? AND read = 0`).run(userId);
+  }
+
+  /** ユーザーの通知をすべて削除する */
+  deleteAllNotifications(userId: number): void {
+    this.db.prepare(`DELETE FROM notifications WHERE user_id = ?`).run(userId);
   }
 
   /**

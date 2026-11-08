@@ -23,6 +23,7 @@ const patchSchema = z
     note: z.string().max(2000).optional(),
     title: z.string().trim().min(1).max(500).optional(),
     lastReadEpisodeKey: z.string().regex(KEY).nullable().optional(),
+    backupEnabled: z.boolean().optional(),
   })
   .strict();
 
@@ -30,7 +31,16 @@ const listQuerySchema = z.object({
   q: z.string().trim().max(200).optional(),
   sort: z.enum(["added", "updated", "title", "site"]).default("added"),
   order: z.enum(["asc", "desc"]).default("desc"),
+  // limit 省略時は全件(旧アプリ互換)
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+  offset: z.coerce.number().int().min(0).default(0),
 });
+
+const bulkIds = z.array(z.number().int().positive()).min(1).max(500);
+const bulkSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("delete"), ids: bulkIds }).strict(),
+  z.object({ action: z.literal("setBackupEnabled"), ids: bulkIds, enabled: z.boolean() }).strict(),
+]);
 
 /** LIKE のワイルドカードをエスケープ(SQL 側は ESCAPE '!')。 */
 export function escapeLike(s: string): string {
@@ -54,22 +64,35 @@ interface BookmarkRow {
   source_updated_at: string | null;
   read_episode_count: number;
   last_read_at: string | null;
+  last_read_position: number | null;
+  backup_enabled: number;
 }
 
 // 既読は reading_progress(ユーザー別)。最終既読話は read_at が最新のもの(なければ bookmarks.last_read_episode_key)
 const PROGRESS_WHERE = "rp.user_id = b.user_id AND rp.site = n.site AND rp.novel_key = n.novel_key";
-const SELECT = `
-  SELECT b.id, b.novel_id, b.note, b.created_at,
-         n.site, n.novel_key, n.title, n.author, n.url,
-         n.last_backup_metadata_at, n.last_backup_all_at, n.backup_episode_count,
-         n.source_updated_at,
-         (SELECT COUNT(*) FROM reading_progress rp WHERE ${PROGRESS_WHERE}) AS read_episode_count,
-         COALESCE(
-           (SELECT rp.episode_key FROM reading_progress rp WHERE ${PROGRESS_WHERE} ORDER BY rp.read_at DESC, rp.episode_key DESC LIMIT 1),
-           b.last_read_episode_key
-         ) AS last_read_episode_key,
-         (SELECT rp.read_at FROM reading_progress rp WHERE ${PROGRESS_WHERE} ORDER BY rp.read_at DESC, rp.episode_key DESC LIMIT 1) AS last_read_at
-  FROM bookmarks b JOIN novels n ON n.id = b.novel_id`;
+const FROM = "FROM bookmarks b JOIN novels n ON n.id = b.novel_id";
+const INNER = `
+    SELECT b.id, b.novel_id, b.note, b.created_at, b.backup_enabled,
+           n.site, n.novel_key, n.title, n.author, n.url,
+           n.last_backup_metadata_at, n.last_backup_all_at, n.backup_episode_count,
+           n.source_updated_at,
+           (SELECT COUNT(*) FROM reading_progress rp WHERE ${PROGRESS_WHERE}) AS read_episode_count,
+           COALESCE(
+             (SELECT rp.episode_key FROM reading_progress rp WHERE ${PROGRESS_WHERE} ORDER BY rp.read_at DESC, rp.episode_key DESC LIMIT 1),
+             b.last_read_episode_key
+           ) AS last_read_episode_key,
+           (SELECT rp.read_at FROM reading_progress rp WHERE ${PROGRESS_WHERE} ORDER BY rp.read_at DESC, rp.episode_key DESC LIMIT 1) AS last_read_at
+    ${FROM}`;
+
+/**
+ * where は内側(b / n を参照可)、orderLimit は外側(列名のみ参照可)に付く。
+ * last_read_position は最終既読話の話番号(作品詳細の「最終既読: 第N話」用。本文一覧を取得せずに出すため)
+ */
+function selectBookmarks(where: string, orderLimit = ""): string {
+  return `SELECT x.*,
+    (SELECT e.position FROM episodes e WHERE e.novel_id = x.novel_id AND e.episode_key = x.last_read_episode_key) AS last_read_position
+    FROM (${INNER} ${where}) x ${orderLimit}`;
+}
 
 /** 作者が未取得(空 / スクレイパーの取得失敗値 "Unknown")か。 */
 export function isBlankAuthor(a: string | null | undefined): boolean {
@@ -95,7 +118,23 @@ export function toBookmarkDto(r: BookmarkRow) {
     lastBackupMetadataAt: (r as any).last_backup_metadata_at ?? null,
     lastBackupAllAt: (r as any).last_backup_all_at ?? null,
     backupEpisodeCount: (r as any).backup_episode_count ?? 0,
+    lastReadPosition: r.last_read_position ?? null,
+    backupEnabled: r.backup_enabled !== 0,
   };
+}
+
+/**
+ * 自動バックアップが有効なお気に入りが残っていない作品の、未実行(待機・失敗)タスクを取り消す。
+ * 実行中のタスクには触れない。作品データは残す
+ */
+function cancelUntrackedTasks(db: Db, novelIds: readonly number[]): void {
+  const stmt = db.prepare(
+    `DELETE FROM backup_tasks
+     WHERE status IN ('pending', 'failed')
+       AND (site, novel_key) = (SELECT site, novel_key FROM novels WHERE id = ?)
+       AND NOT EXISTS (SELECT 1 FROM bookmarks WHERE novel_id = ? AND backup_enabled = 1)`,
+  );
+  for (const id of new Set(novelIds)) stmt.run(id, id);
 }
 
 /** ユーザーのブックマーク ID(なければ null)。 */
@@ -114,7 +153,13 @@ export function bookmarksRouter(db: Db): Router {
   router.use(requireAuth);
 
   function getOne(userId: number, id: number): BookmarkRow | undefined {
-    return db.prepare(`${SELECT} WHERE b.user_id = ? AND b.id = ?`).get(userId, id) as unknown as BookmarkRow | undefined;
+    return db.prepare(selectBookmarks("WHERE b.user_id = ? AND b.id = ?")).get(userId, id) as unknown as BookmarkRow | undefined;
+  }
+  /** ユーザー自身のお気に入りのうち、ids に含まれるもの(他人の id・存在しない id は除外) */
+  function ownedNovelIds(userId: number, ids: readonly number[]): Array<{ id: number; novel_id: number }> {
+    return db
+      .prepare(`SELECT id, novel_id FROM bookmarks WHERE user_id = ? AND id IN (${ids.map(() => "?").join(",")})`)
+      .all(userId, ...ids) as unknown as Array<{ id: number; novel_id: number }>;
   }
   function findNovelId(site: SiteId, novelKey: string): number | undefined {
     const row = db.prepare("SELECT id FROM novels WHERE site = ? AND novel_key = ?").get(site, novelKey) as unknown as
@@ -131,19 +176,20 @@ export function bookmarksRouter(db: Db): Router {
   }
 
   // q: タイトル/作者/サイト(id・日本語名)の部分一致。sort: added|updated|title|site(updated は元サイトでの最新話更新日時 source_updated_at。未取得は常に末尾)
+  // limit/offset でページ単位に取得できる。total は絞り込み後の全件数
   router.get("/", (req, res) => {
     const parsed = listQuerySchema.safeParse(req.query);
     if (!parsed.success) return void res.status(400).json({ error: "validation_error", details: parsed.error.issues });
-    const { q, sort, order } = parsed.data;
+    const { q, sort, order, limit, offset } = parsed.data;
     const dir = order === "asc" ? "ASC" : "DESC";
     const orderBy =
       sort === "title"
-        ? `n.title COLLATE NOCASE ${dir}, b.id DESC`
+        ? `title COLLATE NOCASE ${dir}, id DESC`
         : sort === "site"
-          ? `n.site ${dir}, b.created_at DESC, b.id DESC`
+          ? `site ${dir}, created_at DESC, id DESC`
           : sort === "updated"
-            ? `(n.source_updated_at IS NULL) ASC, n.source_updated_at ${dir}, b.created_at DESC, b.id DESC`
-            : `b.created_at ${dir}, b.id ${dir}`;
+            ? `(source_updated_at IS NULL) ASC, source_updated_at ${dir}, created_at DESC, id DESC`
+            : `created_at ${dir}, id ${dir}`;
     const params: (string | number)[] = [req.user!.id];
     let where = "WHERE b.user_id = ?";
     if (q) {
@@ -151,8 +197,36 @@ export function bookmarksRouter(db: Db): Router {
       where += ` AND (n.title LIKE ? ESCAPE '!' OR n.author LIKE ? ESCAPE '!' OR n.site LIKE ? ESCAPE '!' OR ${SITE_LABEL_SQL} LIKE ? ESCAPE '!')`;
       params.push(like, like, like, like);
     }
-    const rows = db.prepare(`${SELECT} ${where} ORDER BY ${orderBy}`).all(...params) as unknown as BookmarkRow[];
-    res.json({ bookmarks: rows.map(toBookmarkDto) });
+    const total = (db.prepare(`SELECT COUNT(*) AS c ${FROM} ${where}`).get(...params) as unknown as { c: number }).c;
+    const page = limit === undefined ? "" : "LIMIT ? OFFSET ?";
+    const pageParams = limit === undefined ? [] : [limit, offset];
+    const rows = db
+      .prepare(selectBookmarks(where, `ORDER BY ${orderBy} ${page}`))
+      .all(...params, ...pageParams) as unknown as BookmarkRow[];
+    res.json({ bookmarks: rows.map(toBookmarkDto), total });
+  });
+
+  // 複数のお気に入りをまとめて削除 / 自動バックアップの有効・無効を切り替える。他人の id は無視する
+  router.post("/bulk", (req, res) => {
+    const body = parseBody(bulkSchema, req, res);
+    if (!body) return;
+    const userId = req.user!.id;
+    const owned = ownedNovelIds(userId, body.ids);
+    transaction(db, () => {
+      const ids = owned.map((b) => b.id);
+      if (ids.length === 0) return;
+      const inIds = ids.map(() => "?").join(",");
+      if (body.action === "delete") {
+        db.prepare(`DELETE FROM bookmarks WHERE user_id = ? AND id IN (${inIds})`).run(userId, ...ids);
+      } else {
+        db.prepare(`UPDATE bookmarks SET backup_enabled = ? WHERE user_id = ? AND id IN (${inIds})`).run(body.enabled ? 1 : 0, userId, ...ids);
+      }
+      cancelUntrackedTasks(
+        db,
+        owned.map((b) => b.novel_id),
+      );
+    });
+    res.json({ ok: true, affected: owned.length });
   });
 
   // ★ 状態用。作品/話ページでない URL は bookmarked:false
@@ -216,6 +290,12 @@ export function bookmarksRouter(db: Db): Router {
     if (body.lastReadEpisodeKey !== undefined) {
       db.prepare("UPDATE bookmarks SET last_read_episode_key = ? WHERE id = ? AND user_id = ?").run(body.lastReadEpisodeKey, id, userId);
     }
+    if (body.backupEnabled !== undefined) {
+      transaction(db, () => {
+        db.prepare("UPDATE bookmarks SET backup_enabled = ? WHERE id = ? AND user_id = ?").run(body.backupEnabled ? 1 : 0, id, userId);
+        cancelUntrackedTasks(db, [getOne(userId, id)!.novel_id]);
+      });
+    }
     res.json({ bookmark: toBookmarkDto(getOne(userId, id)!) });
   });
 
@@ -226,12 +306,7 @@ export function bookmarksRouter(db: Db): Router {
     if (!target) return sendError(res, 404, "not_found");
     transaction(db, () => {
       db.prepare("DELETE FROM bookmarks WHERE id = ? AND user_id = ?").run(id, req.user!.id);
-      // 誰のお気に入りでもなくなったら、未実行のタスクも取り消す(作品データは残す)
-      db.prepare(
-        `DELETE FROM backup_tasks
-         WHERE site = ? AND novel_key = ? AND status IN ('pending', 'failed')
-           AND NOT EXISTS (SELECT 1 FROM bookmarks WHERE novel_id = ?)`,
-      ).run(target.site, target.novel_key, target.novel_id);
+      cancelUntrackedTasks(db, [target.novel_id]);
     });
     res.json({ ok: true });
   });

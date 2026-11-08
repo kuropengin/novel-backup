@@ -37,6 +37,15 @@ const enqueueSchema = z
     return { site: v.site, novelKeys: [...new Set(keys)], priority: v.priority ?? 0 };
   });
 
+/** お気に入りからのまとめて即時バックアップ。1 リクエストを 1 回として制限に数える */
+const bookmarkTriggerSchema = z.object({ bookmarkIds: z.array(z.number().int().positive()).min(1).max(100) }).strict();
+
+/** 目次(本文なし)のページ取得 */
+const tocQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(20),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
 /** 作品単位の即時バックアップの制限(一般ユーザー / 管理者 / 全体)。10 分窓 */
 const TRIGGER_WINDOW_MS = 10 * 60_000;
 const TRIGGER_USER_MAX = 5;
@@ -133,21 +142,69 @@ export function createBackupRoutes(db: Db, opts: BackupRoutesOptions = {}): Rout
    * POST /api/backup/novels/:site/:novelKey/trigger - 作品単位の即時バックアップ
    * 一般ユーザーも実行可。レート制限(ユーザー別 + 全体)超過は 429 { error: "rate_limited", retryAfter }。
    */
+  /** 即時バックアップの回数制限。超過時は 429 を返して false */
+  function takeTrigger(req: Request, res: Response): boolean {
+    const user = req.user!;
+    const userLimiter = user.role === "admin" ? adminTriggerLimiter : userTriggerLimiter;
+    const userKey = `user:${user.id}`;
+    if (!userLimiter.take(userKey)) {
+      rateLimited(res, userLimiter.retryAfterSec(userKey));
+      return false;
+    }
+    if (!globalTriggerLimiter.take("global")) {
+      rateLimited(res, globalTriggerLimiter.retryAfterSec("global"));
+      return false;
+    }
+    return true;
+  }
+
   router.post("/novels/:site/:novelKey/trigger", (req, res) => {
     const site = parseSiteParam(req.params.site);
     const novelKey = site ? normalizeNovelKey(site, String(req.params.novelKey ?? "")) : null;
     if (!site || !novelKey) return res.status(400).json({ error: "validation_error" });
-
-    const user = req.user!;
-    const userLimiter = user.role === "admin" ? adminTriggerLimiter : userTriggerLimiter;
-    const userKey = `user:${user.id}`;
-    if (!userLimiter.take(userKey)) return rateLimited(res, userLimiter.retryAfterSec(userKey));
-    if (!globalTriggerLimiter.take("global")) return rateLimited(res, globalTriggerLimiter.retryAfterSec("global"));
+    if (!takeTrigger(req, res)) return;
 
     const s = scheduler();
     // その作品だけを処理する(全体サイクルは起動しない)。実行中ならキューへの追加のみ(合流)
     const started = s.triggerNovel(site, novelKey);
     res.json({ enqueued: true, site, novelKey, started });
+  });
+
+  /**
+   * POST /api/backup/bookmarks/trigger - 自分のお気に入り(複数)の即時バックアップ
+   * Body: { bookmarkIds: number[](1〜100) }。他人の id は無視する。回数制限は 1 リクエストで 1 回分
+   */
+  router.post("/bookmarks/trigger", (req, res) => {
+    const parsed = bookmarkTriggerSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return res.status(400).json({ error: "validation_error", details: parsed.error.issues });
+    const ids = parsed.data.bookmarkIds;
+    const novels = db
+      .prepare(
+        `SELECT n.site, n.novel_key FROM bookmarks b JOIN novels n ON n.id = b.novel_id
+         WHERE b.user_id = ? AND b.id IN (${ids.map(() => "?").join(",")})`
+      )
+      .all(req.user!.id, ...ids) as unknown as Array<{ site: SiteId; novel_key: string }>;
+    if (novels.length === 0) return res.status(404).json({ error: "not_found" });
+    if (!takeTrigger(req, res)) return;
+
+    const s = scheduler();
+    // 1 件目で作品単位の実行が始まり、残りは実行中のループに合流する
+    let started = false;
+    for (const n of novels) started = s.triggerNovel(n.site, n.novel_key) || started;
+    res.json({ enqueued: novels.length, started });
+  });
+
+  /**
+   * GET /api/backup/novels/:site/:novelKey/toc?limit=&offset= - 目次(本文なし)のページ取得
+   * Response: { site, novelKey, total, episodes: [{ episodeKey, position, title, updatedAt, publishedAt }] }
+   */
+  router.get("/novels/:site/:novelKey/toc", (req, res) => {
+    const site = parseSiteParam(req.params.site);
+    const novelKey = site ? normalizeNovelKey(site, String(req.params.novelKey ?? "")) : null;
+    const parsed = tocQuerySchema.safeParse(req.query);
+    if (!site || !novelKey || !parsed.success) return res.status(400).json({ error: "validation_error" });
+    const { total, episodes } = repository.listEpisodeToc(site, novelKey, parsed.data.offset, parsed.data.limit);
+    res.json({ site, novelKey, total, episodes });
   });
 
   /**

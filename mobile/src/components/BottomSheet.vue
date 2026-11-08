@@ -2,7 +2,8 @@
 import { onUnmounted, watch } from "vue";
 import { pushOverlay } from "../stores/overlays";
 
-const props = defineProps<{ open: boolean; title?: string }>();
+/** height を指定すると高さを固定し、中身(slot)の側でスクロールする(例: "70vh")。label は見出しなしのときの読み上げ名 */
+const props = defineProps<{ open: boolean; title?: string; label?: string; height?: string }>();
 const emit = defineEmits<{ (e: "close"): void }>();
 
 let release: (() => void) | null = null;
@@ -29,7 +30,7 @@ onUnmounted(() => release?.());
     <div v-if="open" class="scrim" @click="onScrimClick" />
   </Transition>
   <Transition name="slide-up">
-    <div v-if="open" class="sheet" role="dialog" :aria-label="title">
+    <div v-if="open" class="sheet" :class="{ fixed: !!height }" :style="height ? { height } : undefined" role="dialog" :aria-label="title ?? label">
       <div class="grab" />
       <h3 v-if="title">{{ title }}</h3>
       <slot />

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { BackupRepository } from "../src/backup/repository.js";
 import { client, makeAdmin, makeViewer, setupApp } from "./helpers.js";
 
 describe("bookmarks API", () => {
@@ -35,6 +36,8 @@ describe("bookmarks API", () => {
       lastBackupMetadataAt: null,
       lastBackupAllAt: null,
       backupEpisodeCount: 0,
+      lastReadPosition: null,
+      backupEnabled: true,
     });
 
     // site + novelKey 指定、author は任意
@@ -96,6 +99,53 @@ describe("bookmarks API", () => {
     expect((db.prepare("SELECT COUNT(*) AS c FROM novels").get() as unknown as { c: number }).c).toBe(1);
   });
 
+  it("auto backup toggle: tracked only while someone has it enabled; disabling cancels queued tasks", async () => {
+    const { app, db } = setupApp();
+    const admin = await makeAdmin(app);
+    const viewer = await makeViewer(admin, app);
+    const a = (await admin.post("/api/bookmarks").send({ site: "narou", novelKey: "n1234ab", title: "x" })).body.bookmark;
+    const v = (await viewer.post("/api/bookmarks").send({ site: "narou", novelKey: "n1234ab", title: "x" })).body.bookmark;
+    const tracked = () => new BackupRepository(db).listTrackedNovels().map((n) => n.novelKey);
+    const pending = () => (db.prepare(`SELECT COUNT(*) AS c FROM backup_tasks WHERE status = 'pending'`).get() as unknown as { c: number }).c;
+    const enqueue = () => new BackupRepository(db).enqueueTasks("narou", ["n1234ab"], "all");
+
+    enqueue();
+    const off = await admin.patch(`/api/bookmarks/${a.id}`).send({ backupEnabled: false });
+    expect(off.body.bookmark.backupEnabled).toBe(false);
+    expect(tracked()).toEqual(["n1234ab"]); // viewer は有効のまま
+    expect(pending()).toBe(1);
+
+    expect((await viewer.post("/api/bookmarks/bulk").send({ action: "setBackupEnabled", ids: [v.id], enabled: false })).body.affected).toBe(1);
+    expect(tracked()).toEqual([]);
+    expect(pending()).toBe(0);
+    expect((await admin.get("/api/bookmarks")).body.bookmarks[0].backupEnabled).toBe(false); // お気に入り自体は残る
+
+    await admin.patch(`/api/bookmarks/${a.id}`).send({ backupEnabled: true });
+    expect(tracked()).toEqual(["n1234ab"]);
+    expect((await admin.patch(`/api/bookmarks/${a.id}`).send({ backupEnabled: "no" })).status).toBe(400);
+  });
+
+  it("bulk delete affects only the caller's bookmarks", async () => {
+    const { app } = setupApp();
+    const admin = await makeAdmin(app);
+    const viewer = await makeViewer(admin, app);
+    const add = async (c: typeof admin, novelKey: string) =>
+      (await c.post("/api/bookmarks").send({ site: "narou", novelKey, title: novelKey })).body.bookmark.id as number;
+    const a1 = await add(admin, "n1111aa");
+    const a2 = await add(admin, "n2222bb");
+    const a3 = await add(admin, "n3333cc");
+    const v1 = await add(viewer, "n1111aa");
+
+    const r = await admin.post("/api/bookmarks/bulk").send({ action: "delete", ids: [a1, a3, v1, 9999] });
+    expect(r.body).toEqual({ ok: true, affected: 2 });
+    expect((await admin.get("/api/bookmarks")).body.bookmarks.map((b: { id: number }) => b.id)).toEqual([a2]);
+    expect((await viewer.get("/api/bookmarks")).body.bookmarks).toHaveLength(1);
+
+    expect((await admin.post("/api/bookmarks/bulk").send({ action: "delete", ids: [] })).status).toBe(400);
+    expect((await admin.post("/api/bookmarks/bulk").send({ action: "nope", ids: [a2] })).status).toBe(400);
+    expect((await admin.post("/api/bookmarks/bulk").send({ action: "setBackupEnabled", ids: [a2] })).status).toBe(400);
+  });
+
   it("validates input", async () => {
     const { app } = setupApp();
     const a = await makeAdmin(app);
@@ -143,6 +193,20 @@ describe("bookmarks list query and lookup", () => {
     expect(titles(await v.get("/api/bookmarks?q=banana"))).toEqual(["banana other"]);
     expect((await a.get("/api/bookmarks?sort=bogus")).status).toBe(400);
     expect((await a.get("/api/bookmarks?order=up")).status).toBe(400);
+  });
+
+  it("pages with limit/offset after sorting and filtering, and reports the filtered total", async () => {
+    const { a } = await seed();
+    const p1 = await a.get("/api/bookmarks?sort=title&order=asc&limit=2");
+    expect(titles(p1)).toEqual(["Apple", "banana"]);
+    expect(p1.body.total).toBe(3);
+    const p2 = await a.get("/api/bookmarks?sort=title&order=asc&limit=2&offset=2");
+    expect(titles(p2)).toEqual(["cherry 100%"]);
+    const q = await a.get("/api/bookmarks?q=an&limit=1");
+    expect(q.body.total).toBe(1);
+    expect((await a.get("/api/bookmarks")).body.total).toBe(3);
+    expect((await a.get("/api/bookmarks?limit=0")).status).toBe(400);
+    expect((await a.get("/api/bookmarks?offset=-1")).status).toBe(400);
   });
 
   it("lookup resolves episode URLs to the novel bookmark, per user", async () => {

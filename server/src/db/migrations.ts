@@ -334,6 +334,10 @@ CREATE INDEX IF NOT EXISTS idx_user_blocklists_user ON user_blocklists(user_id);
 UPDATE episode_versions SET title = (SELECT e.title FROM episodes e WHERE e.id = episode_versions.episode_id)
 WHERE episode_id IN (SELECT e.id FROM episodes e JOIN novels n ON n.id = e.novel_id WHERE n.site = 'kakuyomu');
 `,
+  // 16: お気に入りごとの自動(定期)バックアップの有効・無効。有効なお気に入りが 1 件でもある作品だけを定期取得する
+  `
+ALTER TABLE bookmarks ADD COLUMN backup_enabled INTEGER NOT NULL DEFAULT 1;
+`,
 ];
 
 export function runMigrations(db: DatabaseSync): void {

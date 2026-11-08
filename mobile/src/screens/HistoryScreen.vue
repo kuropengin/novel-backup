@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from "vue";
 import Icon from "../components/Icon.vue";
+import LoadMore from "../components/LoadMore.vue";
 import SwipeRow from "../components/SwipeRow.vue";
 import { ApiError, deleteHistory, deleteHistoryNovel, errorMessage, listHistory, type HistoryItem } from "../api";
 import type { Settings } from "../storage";
 import { confirmNative } from "../native/dialogs";
 import { relativeTime } from "../logic/lists";
 import { siteColor, siteLabel } from "../logic/sites";
+
+/** 1 回に読み込む件数(スクロールで続きを読む) */
+const PAGE = 30;
 
 const props = defineProps<{ settings: Settings }>();
 const emit = defineEmits<{ (e: "open", url: string): void; (e: "unauthorized"): void }>();
@@ -15,17 +19,24 @@ const view = ref<"episode" | "novel">("episode");
 const q = ref("");
 const items = ref<HistoryItem[]>([]);
 const loading = ref(true);
+const loadingMore = ref(false);
+const done = ref(false);
 const error = ref("");
+const moreError = ref("");
 const cfg = () => ({ serverUrl: props.settings.serverUrl, token: props.settings.token });
 
+// 表示・検索語が変わったら古い応答を捨てる
 let seq = 0;
 async function load() {
   const my = ++seq;
   loading.value = true;
   error.value = "";
+  moreError.value = "";
   try {
-    const r = await listHistory(cfg(), view.value, q.value);
-    if (my === seq) items.value = r;
+    const r = await listHistory(cfg(), view.value, q.value, PAGE, 0);
+    if (my !== seq) return;
+    items.value = r;
+    done.value = r.length < PAGE;
   } catch (e) {
     if (my !== seq) return;
     if (e instanceof ApiError && e.status === 401) emit("unauthorized");
@@ -34,6 +45,27 @@ async function load() {
     if (my === seq) loading.value = false;
   }
 }
+
+async function more() {
+  if (loading.value || loadingMore.value || done.value) return;
+  const my = seq;
+  loadingMore.value = true;
+  moreError.value = "";
+  try {
+    const r = await listHistory(cfg(), view.value, q.value, PAGE, items.value.length);
+    if (my !== seq) return;
+    const known = new Set(items.value.map((h) => h.id));
+    items.value = [...items.value, ...r.filter((h) => !known.has(h.id))];
+    done.value = r.length < PAGE;
+  } catch (e) {
+    if (my !== seq) return;
+    if (e instanceof ApiError && e.status === 401) emit("unauthorized");
+    else moreError.value = errorMessage(e);
+  } finally {
+    loadingMore.value = false;
+  }
+}
+
 onMounted(load);
 watch(view, () => {
   items.value = [];
@@ -55,7 +87,8 @@ async function remove(h: HistoryItem) {
   try {
     if (novel) await deleteHistoryNovel(cfg(), h.site, h.novelKey);
     else await deleteHistory(cfg(), h.id);
-    await load();
+    // 読み込み済みのページを保ったまま、消した行だけ取り除く
+    items.value = items.value.filter((x) => (novel ? !(x.site === h.site && x.novelKey === h.novelKey) : x.id !== h.id));
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) emit("unauthorized");
     else error.value = errorMessage(e);
@@ -91,5 +124,6 @@ async function remove(h: HistoryItem) {
         </div>
       </div>
     </SwipeRow>
+    <LoadMore v-if="!loading && items.length > 0" :loading="loadingMore" :done="done" :error="moreError" @more="more" />
   </div>
 </template>

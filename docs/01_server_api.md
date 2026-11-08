@@ -51,13 +51,16 @@ server/src/
 
 | メソッド/パス | 内容 |
 |---|---|
-| `GET /` | `{ bookmarks: [...] }`。クエリ `q`(タイトル/作者/サイト id・日本語名の部分一致、大小無視)、`sort=added|updated|title|site`(既定 `added`。`updated` は当面 `added` と同じ)、`order=asc|desc`(既定 `desc`)。不正値は `400 validation_error` |
+| `GET /` | `{ bookmarks: [...], total }`。クエリ `q`(タイトル/作者/サイト id・日本語名の部分一致、大小無視)、`sort=added|updated|title|site`(既定 `added`。`updated` は元サイトの最新話更新日時、未取得は末尾)、`order=asc|desc`(既定 `desc`)、`limit` 1〜500(省略時は全件)・`offset` ≥ 0。`total` は絞り込み後の全件数。不正値は `400 validation_error` |
 | `GET /lookup?url=` | `{ bookmarked, bookmarkId }`。話ページ URL でも作品で判定。作品/話ページ以外は `{ false, null }`。`url` 無しは 400 |
 | `POST /` | `{ url, title, author? }` または `{ site, novelKey, title, author? }`。**`title` 必須**(アプリが表示中のページから取得して送る)。サーバーはサイトへアクセスしない。`url` は `resolveUrl` で作品に解決(話ページ URL も可)。作成 `201 { bookmark, created: true }`、登録済み `200 { bookmark, created: false }`(既存作品のタイトル/著者が空のときのみ補完)。作品/話ページでない URL は `400 not_a_novel_page` |
-| `PATCH /:id` | `{ note?, title?, lastReadEpisodeKey? }`(`title` は共有の作品タイトルを更新) |
-| `DELETE /:id` | 削除。作品行と保存済みの話・本文は残る。誰のお気に入りでもなくなった作品は定期バックアップの対象から外れ、未実行のタスクも取り消す(再登録で再開) |
+| `PATCH /:id` | `{ note?, title?, lastReadEpisodeKey?, backupEnabled? }`(`title` は共有の作品タイトルを更新。`backupEnabled` は自分のお気に入りの自動バックアップの有効・無効) |
+| `DELETE /:id` | 削除。作品行と保存済みの話・本文は残る |
+| `POST /bulk` | `{ action: "delete", ids }` または `{ action: "setBackupEnabled", ids, enabled }`(`ids` 1〜500)。自分のお気に入りだけを処理し、他人の id・無い id は無視。`{ ok, affected }` |
 
-ブックマーク DTO: `id, novelId, site, novelKey, title, author, url, note, lastReadEpisodeKey, createdAt`。
+定期バックアップの対象は、**自動バックアップが有効なお気に入りが 1 件以上ある作品**だけ。削除・無効化でそうした作品がなくなったときは、その作品の未実行(待機・失敗)のタスクも取り消す(実行中は最後まで続く)。保存済みのデータは残り、再登録・再有効化で再開する。手動の即時バックアップは無効でも実行できる。
+
+ブックマーク DTO: `id, novelId, site, novelKey, title, author, url, note, lastReadEpisodeKey, lastReadPosition, backupEnabled, createdAt` ほか(`lastReadPosition` は最終既読話の話番号、不明なら null)。
 
 ### 閲覧履歴 `/api/history`(認証必須・自分の分のみ)
 
@@ -70,6 +73,25 @@ server/src/
 | `DELETE /:id` | 1 行削除。他人の行/無い行は 404 |
 | `DELETE /?site=&novelKey=` | 作品単位で削除(両方必須、片方だけは 400)。`{ ok, deleted }` |
 | `DELETE /` | 自分の履歴を全消去。`{ ok, deleted }` |
+
+### お知らせ `/api/notifications`(認証必須・自分の分のみ)
+
+| メソッド/パス | 内容 |
+|---|---|
+| `GET /?limit=&offset=` | `{ notifications, unreadCount, total }`。新しい順。`limit` 1〜200(既定 50)、`offset` ≥ 0。`unreadCount`・`total` は全体の件数 |
+| `POST /:id/read` | 1 件既読 |
+| `POST /read-all` | 未取得のページも含めてすべて既読 |
+| `DELETE /:id` | 1 件削除 |
+| `DELETE /` | 未取得のページも含めてすべて削除 |
+
+### バックアップ `/api/backup`(認証必須。抜粋)
+
+| メソッド/パス | 内容 |
+|---|---|
+| `POST /novels/:site/:novelKey/trigger` | 作品単位の即時バックアップ(回数制限あり) |
+| `POST /bookmarks/trigger` | `{ bookmarkIds }`(1〜100)。自分のお気に入りの即時バックアップをまとめて受け付ける。回数制限は 1 リクエストで 1 回分。`{ enqueued, started }`。対象が無ければ 404 |
+| `GET /novels/:site/:novelKey/toc?limit=&offset=` | 本文取得済みの話の目次(本文なし)を話順にページ取得。`limit` 1〜200(既定 20)。`{ site, novelKey, total, episodes: [{ episodeKey, position, title, updatedAt, publishedAt }] }` |
+| `GET /novels/:site/:novelKey/episodes` | 最新バックアップの本文を全話まとめて返す(リーダー・端末保存用) |
 
 ### 広告ブロックリスト `/api/blocklists`(認証必須・自分の分のみ)
 

@@ -7,7 +7,9 @@ import path from "node:path";
 import bcrypt from "bcryptjs";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
+import { BackupRepository } from "../src/backup/repository.js";
 import type { BackupScheduler } from "../src/backup/scheduler.js";
+import { NotificationRepository } from "../src/db/notification.repository.js";
 import { FailureBackoff, ipKey, RateLimiter } from "../src/http/rateLimit.js";
 import { normalizeNovelKey } from "../src/sites.js";
 import { login, makeAdmin, makeViewer, setupApp, SETUP_TOKEN } from "./helpers.js";
@@ -134,6 +136,81 @@ describe("error responses", () => {
     expect((await admin.post("/api/notifications/12abc/read").send({})).status).toBe(400);
     expect((await admin.delete("/api/notifications/1e3")).status).toBe(400);
     expect((await admin.post("/api/notifications/5/read").send({})).status).toBe(200);
+  });
+
+  it("notifications page with limit/offset; read-all and delete-all cover unloaded pages, per user", async () => {
+    const { app, db } = setupApp();
+    const admin = await makeAdmin(app);
+    const viewer = await makeViewer(admin, app);
+    const repo = new NotificationRepository(db);
+    const adminId = (db.prepare("SELECT id FROM users WHERE username = 'admin'").get() as unknown as { id: number }).id;
+    const viewerId = (db.prepare("SELECT id FROM users WHERE username = 'viewer1'").get() as unknown as { id: number }).id;
+    for (let i = 0; i < 5; i++) repo.createNotification(adminId, "backup", `t${i}`);
+    repo.createNotification(viewerId, "backup", "v");
+
+    const p1 = await admin.get("/api/notifications?limit=2");
+    expect(p1.body).toMatchObject({ total: 5, unreadCount: 5 });
+    expect(p1.body.notifications.map((n: { title: string }) => n.title)).toEqual(["t4", "t3"]);
+    const p3 = await admin.get("/api/notifications?limit=2&offset=4");
+    expect(p3.body.notifications.map((n: { title: string }) => n.title)).toEqual(["t0"]);
+    expect((await admin.get("/api/notifications?limit=0")).status).toBe(400);
+
+    await admin.post("/api/notifications/read-all").send({});
+    expect((await admin.get("/api/notifications")).body.unreadCount).toBe(0);
+    expect((await viewer.get("/api/notifications")).body.unreadCount).toBe(1);
+
+    await admin.delete("/api/notifications");
+    expect((await admin.get("/api/notifications")).body.total).toBe(0);
+    expect((await viewer.get("/api/notifications")).body.total).toBe(1);
+  });
+});
+
+describe("bookmark bulk trigger", () => {
+  it("triggers only the caller's bookmarks and counts as one rate-limit take", async () => {
+    const sch = mockScheduler();
+    const { app } = setupApp({ getScheduler: asScheduler(sch) });
+    const admin = await makeAdmin(app);
+    const viewer = await makeViewer(admin, app);
+    const add = async (c: typeof admin, novelKey: string) =>
+      (await c.post("/api/bookmarks").send({ site: "narou", novelKey, title: novelKey })).body.bookmark.id as number;
+    const v1 = await add(viewer, "n1111aa");
+    const v2 = await add(viewer, "n2222bb");
+    const a1 = await add(admin, "n3333cc");
+
+    const r = await viewer.post("/api/backup/bookmarks/trigger").send({ bookmarkIds: [v1, v2, a1] });
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ enqueued: 2, started: true });
+    expect(sch.triggerNovel.mock.calls).toEqual([
+      ["narou", "n1111aa"],
+      ["narou", "n2222bb"],
+    ]);
+    expect((await viewer.post("/api/backup/bookmarks/trigger").send({ bookmarkIds: [a1] })).status).toBe(404);
+    expect((await viewer.post("/api/backup/bookmarks/trigger").send({ bookmarkIds: [] })).status).toBe(400);
+    for (let i = 0; i < 4; i++) expect((await viewer.post("/api/backup/bookmarks/trigger").send({ bookmarkIds: [v1, v2] })).status).toBe(200);
+    expect((await viewer.post("/api/backup/bookmarks/trigger").send({ bookmarkIds: [v1] })).status).toBe(429);
+  });
+});
+
+describe("episode toc", () => {
+  it("pages fetched episodes in position order without bodies", async () => {
+    const { app, db } = setupApp();
+    const admin = await makeAdmin(app);
+    const repo = new BackupRepository(db);
+    repo.saveNovelMetadata("narou", "n1234ab", { title: "T", author: "A", description: "", status: "", episodeCount: 0, lastUpdated: "", url: "u" });
+    const eps = Array.from({ length: 5 }, (_, i) => ({ episodeKey: String(i + 1), position: i + 1, title: `第${i + 1}話`, publishedAt: "", updatedAt: "" }));
+    repo.saveEpisodes("narou", "n1234ab", eps);
+    for (const e of eps.filter((e) => e.episodeKey !== "3")) repo.saveEpisodeContent("narou", "n1234ab", e.episodeKey, { title: e.title, bodyHtml: "本文", updatedAt: "" });
+
+    const p1 = await admin.get("/api/backup/novels/narou/n1234ab/toc?limit=2");
+    expect(p1.body.total).toBe(4); // 本文未取得の 3 話は含めない
+    expect(p1.body.episodes).toEqual([
+      { episodeKey: "1", position: 1, title: "第1話", updatedAt: null, publishedAt: null },
+      { episodeKey: "2", position: 2, title: "第2話", updatedAt: null, publishedAt: null },
+    ]);
+    const p2 = await admin.get("/api/backup/novels/narou/n1234ab/toc?limit=2&offset=2");
+    expect(p2.body.episodes.map((e: { episodeKey: string }) => e.episodeKey)).toEqual(["4", "5"]);
+    expect((await admin.get("/api/backup/novels/narou/n1234ab/toc?limit=500")).status).toBe(400);
+    expect((await admin.get("/api/backup/novels/narou/bad!/toc")).status).toBe(400);
   });
 });
 

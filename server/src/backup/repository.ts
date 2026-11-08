@@ -13,13 +13,16 @@ function cleanAuthor(author: string | null | undefined): string {
 export class BackupRepository {
   constructor(private db: Db) {}
 
-  /** 定期バックアップの対象。誰のお気に入りでもない作品は取得を止める(保存済みのデータは残す) */
+  /**
+   * 定期バックアップの対象。自動バックアップが有効なお気に入りが 1 件も無い作品は取得を止める
+   * (保存済みのデータは残す)
+   */
   listTrackedNovels(): Array<{ site: SiteId; novelKey: string }> {
     const rows = this.db
       .prepare(
         `SELECT site, novel_key
          FROM novels n
-         WHERE EXISTS (SELECT 1 FROM bookmarks b WHERE b.novel_id = n.id)
+         WHERE EXISTS (SELECT 1 FROM bookmarks b WHERE b.novel_id = n.id AND b.backup_enabled = 1)
          ORDER BY site, novel_key`
       )
       .all() as Array<{ site: SiteId; novel_key: string }>;
@@ -487,6 +490,53 @@ export class BackupRepository {
       fetchedAt: string;
       version: number;
     }>;
+  }
+
+  /**
+   * 本文を取得済みの話の目次(本文なし)を position 順に offset/limit で返す。total は取得済みの全話数。
+   * 話の並び・対象は listLatestEpisodeContents と同じ(本文のある話だけ)
+   */
+  listEpisodeToc(
+    site: SiteId,
+    novelKey: string,
+    offset: number,
+    limit: number
+  ): {
+    total: number;
+    episodes: Array<{ episodeKey: string; position: number; title: string; updatedAt: string | null; publishedAt: string | null }>;
+  } {
+    const from = `FROM novels n
+         JOIN episodes ep ON ep.novel_id = n.id
+         JOIN (
+           SELECT v1.episode_id, v1.title, v1.site_updated_at
+           FROM episode_versions v1
+           JOIN (
+             SELECT episode_id, MAX(version) AS max_version
+             FROM episode_versions
+             GROUP BY episode_id
+           ) latest ON latest.episode_id = v1.episode_id AND latest.max_version = v1.version
+         ) v ON v.episode_id = ep.id
+         WHERE n.site = ? AND n.novel_key = ?`;
+    const total = (this.db.prepare(`SELECT COUNT(*) AS c ${from}`).get(site, novelKey) as { c: number }).c;
+    const episodes = this.db
+      .prepare(
+        `SELECT ep.episode_key AS episodeKey,
+                ep.position AS position,
+                COALESCE(v.title, ep.title) AS title,
+                COALESCE(NULLIF(v.site_updated_at, ''), ep.site_updated_at) AS updatedAt,
+                ep.site_published_at AS publishedAt
+         ${from}
+         ORDER BY ep.position ASC
+         LIMIT ? OFFSET ?`
+      )
+      .all(site, novelKey, limit, offset) as Array<{
+      episodeKey: string;
+      position: number;
+      title: string;
+      updatedAt: string | null;
+      publishedAt: string | null;
+    }>;
+    return { total, episodes };
   }
 
   private _hashContent(html: string): string {

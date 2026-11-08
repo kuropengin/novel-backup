@@ -110,6 +110,7 @@ select { width: auto; }
 .fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 51; background: var(--elevated); border-radius: 20px 20px 0 0; padding: 8px 16px calc(var(--sab) + 20px); max-height: 85vh; overflow-y: auto; }
+.sheet.fixed { display: flex; flex-direction: column; max-height: none; overflow: hidden; padding-bottom: 0; }
 .sheet .grab { width: 36px; height: 4px; border-radius: 2px; background: var(--border); margin: 0 auto 10px; }
 .sheet h3 { margin: 0 0 4px; font-size: 18px; font-weight: 800; }
 .sheet .group-label { font-size: 13px; color: var(--muted); margin: 16px 0 8px; }

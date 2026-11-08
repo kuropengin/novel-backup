@@ -33,6 +33,29 @@ export interface Bookmark {
   readEpisodeCount?: number;
   lastReadEpisodeKey?: string | null;
   lastReadAt?: string | null;
+  /** 最終既読話の話番号(サーバーで分かる場合) */
+  lastReadPosition?: number | null;
+  /** 自動(定期)バックアップの対象にするか。旧サーバーでは未定義(= 有効) */
+  backupEnabled?: boolean;
+}
+
+export type BookmarkSort = "added" | "updated" | "title" | "site";
+
+export interface BookmarkPageQuery {
+  q?: string;
+  sort?: BookmarkSort;
+  order?: "asc" | "desc";
+  limit: number;
+  offset: number;
+}
+
+/** 目次(本文なし)の 1 話分 */
+export interface TocEpisode {
+  episodeKey: string;
+  position: number;
+  title: string;
+  updatedAt?: string | null;
+  publishedAt?: string | null;
 }
 
 export interface ReadingProgress {
@@ -210,8 +233,26 @@ export async function logout(cfg: ApiConfig): Promise<void> {
   await call(cfg, "POST", "/api/auth/logout", {});
 }
 
-export async function listBookmarks(cfg: ApiConfig): Promise<Bookmark[]> {
-  return (await call<{ bookmarks: Bookmark[] }>(cfg, "GET", "/api/bookmarks")).data.bookmarks;
+/** お気に入りのページ取得。total は絞り込み後の全件数 */
+export async function listBookmarks(cfg: ApiConfig, query: BookmarkPageQuery): Promise<{ bookmarks: Bookmark[]; total: number }> {
+  const qs = new URLSearchParams({ limit: String(query.limit), offset: String(query.offset) });
+  if (query.q?.trim()) qs.set("q", query.q.trim());
+  if (query.sort) qs.set("sort", query.sort);
+  if (query.order) qs.set("order", query.order);
+  const d = (await call<{ bookmarks: Bookmark[]; total?: number }>(cfg, "GET", `/api/bookmarks?${qs}`)).data;
+  return { bookmarks: d.bookmarks, total: d.total ?? d.bookmarks.length };
+}
+
+export async function setBookmarkBackupEnabled(cfg: ApiConfig, id: number, enabled: boolean): Promise<Bookmark> {
+  return (await call<{ bookmark: Bookmark }>(cfg, "PATCH", `/api/bookmarks/${id}`, { backupEnabled: enabled })).data.bookmark;
+}
+
+/** 複数のお気に入りをまとめて削除 / 自動バックアップの有効・無効を切り替える。戻り値は処理した件数 */
+export async function bulkBookmarks(
+  cfg: ApiConfig,
+  input: { action: "delete"; ids: number[] } | { action: "setBackupEnabled"; ids: number[]; enabled: boolean },
+): Promise<number> {
+  return (await call<{ affected: number }>(cfg, "POST", "/api/bookmarks/bulk", input)).data.affected;
 }
 
 /** 表示中ページ(話ページでも可)の★状態 */
@@ -223,8 +264,8 @@ export async function postHistory(cfg: ApiConfig, input: HistoryInput): Promise<
   return (await call<{ history: HistoryItem }>(cfg, "POST", "/api/history", input)).data.history;
 }
 
-export async function listHistory(cfg: ApiConfig, view: "episode" | "novel", q = "", limit = 200): Promise<HistoryItem[]> {
-  const qs = new URLSearchParams({ view, limit: String(limit) });
+export async function listHistory(cfg: ApiConfig, view: "episode" | "novel", q = "", limit = 200, offset = 0): Promise<HistoryItem[]> {
+  const qs = new URLSearchParams({ view, limit: String(limit), offset: String(offset) });
   if (q.trim()) qs.set("q", q.trim());
   return (await call<{ history: HistoryItem[] }>(cfg, "GET", `/api/history?${qs}`)).data.history;
 }
@@ -248,8 +289,25 @@ export async function deleteBookmark(cfg: ApiConfig, id: number): Promise<void> 
   await call(cfg, "DELETE", `/api/bookmarks/${id}`);
 }
 
-export async function listNotifications(cfg: ApiConfig): Promise<{ notifications: Notification[]; unreadCount: number }> {
-  return (await call<{ notifications: Notification[]; unreadCount: number }>(cfg, "GET", "/api/notifications")).data;
+/** お知らせのページ取得(新しい順)。unreadCount は全体の未読数、total は全件数 */
+export async function listNotifications(
+  cfg: ApiConfig,
+  limit: number,
+  offset = 0,
+): Promise<{ notifications: Notification[]; unreadCount: number; total: number }> {
+  const qs = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  const d = (await call<{ notifications: Notification[]; unreadCount: number; total?: number }>(cfg, "GET", `/api/notifications?${qs}`)).data;
+  return { ...d, total: d.total ?? d.notifications.length };
+}
+
+/** 未取得のページも含めてすべて既読にする */
+export async function markAllNotificationsAsRead(cfg: ApiConfig): Promise<void> {
+  await call(cfg, "POST", "/api/notifications/read-all");
+}
+
+/** 未取得のページも含めてすべて削除する */
+export async function deleteAllNotifications(cfg: ApiConfig): Promise<void> {
+  await call(cfg, "DELETE", "/api/notifications");
 }
 
 export async function markNotificationAsRead(cfg: ApiConfig, notificationId: number): Promise<void> {
@@ -268,6 +326,35 @@ export async function triggerNovelBackup(cfg: ApiConfig, site: string, novelKey:
     if (e instanceof ApiError && e.status === 429) throw new ApiError(429, "backup_rate_limited", undefined, e.retryAfter);
     throw e;
   }
+}
+
+/** 複数のお気に入りの即時バックアップ(回数制限は 1 回分)。戻り値は受け付けた作品数 */
+export async function triggerBookmarksBackup(cfg: ApiConfig, bookmarkIds: number[]): Promise<number> {
+  try {
+    return (await call<{ enqueued: number }>(cfg, "POST", "/api/backup/bookmarks/trigger", { bookmarkIds })).data.enqueued;
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 429) throw new ApiError(429, "backup_rate_limited", undefined, e.retryAfter);
+    throw e;
+  }
+}
+
+/** 目次(本文なし)のページ取得。total は本文取得済みの全話数 */
+export async function listEpisodeToc(
+  cfg: ApiConfig,
+  site: string,
+  novelKey: string,
+  offset: number,
+  limit: number,
+): Promise<{ total: number; episodes: TocEpisode[] }> {
+  const qs = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+  const d = (
+    await call<{ total: number; episodes: TocEpisode[] }>(
+      cfg,
+      "GET",
+      `/api/backup/novels/${encodeURIComponent(site)}/${encodeURIComponent(novelKey)}/toc?${qs}`,
+    )
+  ).data;
+  return { total: d.total, episodes: d.episodes };
 }
 
 export async function listBackupEpisodes(cfg: ApiConfig, site: string, novelKey: string): Promise<BackupEpisode[]> {
