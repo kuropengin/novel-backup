@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import Icon from "../components/Icon.vue";
-import LoadMore from "../components/LoadMore.vue";
+import Pager from "../components/Pager.vue";
+import SiteFilter from "../components/SiteFilter.vue";
 import SwipeRow from "../components/SwipeRow.vue";
 import { ApiError, deleteHistory, deleteHistoryNovel, errorMessage, listHistory, type HistoryItem } from "../api";
 import type { Settings } from "../storage";
 import { confirmNative } from "../native/dialogs";
 import { relativeTime } from "../logic/lists";
-import { siteColor, siteLabel } from "../logic/sites";
+import { siteColor, siteLabel, type SiteId } from "../logic/sites";
 
-/** 1 回に読み込む件数(スクロールで続きを読む) */
+/** 1 ページの件数 */
 const PAGE = 30;
 
 const props = defineProps<{ settings: Settings }>();
@@ -17,26 +18,41 @@ const emit = defineEmits<{ (e: "open", url: string): void; (e: "unauthorized"): 
 
 const view = ref<"episode" | "novel">("episode");
 const q = ref("");
+/** サイトの絞り込み(null = すべて) */
+const siteFilter = ref<SiteId | null>(null);
 const items = ref<HistoryItem[]>([]);
+/** サーバー側の(絞り込み後の)全件数 */
+const total = ref(0);
+/** 表示中のページ(1 始まり) */
+const page = ref(1);
+const pageCount = computed(() => Math.max(1, Math.ceil(total.value / PAGE)));
 const loading = ref(true);
-const loadingMore = ref(false);
-const done = ref(false);
 const error = ref("");
-const moreError = ref("");
 const cfg = () => ({ serverUrl: props.settings.serverUrl, token: props.settings.token });
 
-// 表示・検索語が変わったら古い応答を捨てる
+// 表示・検索語・サイト・ページが変わったら古い応答を捨てる
 let seq = 0;
-async function load() {
+/** 表示中のページを取得する。silent は削除後の更新用(表示を消さない) */
+async function load(silent = false) {
   const my = ++seq;
-  loading.value = true;
+  if (!silent) loading.value = true;
   error.value = "";
-  moreError.value = "";
   try {
-    const r = await listHistory(cfg(), view.value, q.value, PAGE, 0);
+    const r = await listHistory(cfg(), {
+      view: view.value,
+      q: q.value,
+      site: siteFilter.value ?? undefined,
+      limit: PAGE,
+      offset: (page.value - 1) * PAGE,
+    });
     if (my !== seq) return;
-    items.value = r;
-    done.value = r.length < PAGE;
+    // 削除などで今のページが無くなったら最後のページを出す
+    if (r.history.length === 0 && r.total > 0 && page.value > 1) {
+      page.value = Math.ceil(r.total / PAGE);
+      return void load(silent);
+    }
+    items.value = r.history;
+    total.value = r.total;
   } catch (e) {
     if (my !== seq) return;
     if (e instanceof ApiError && e.status === 401) emit("unauthorized");
@@ -46,35 +62,26 @@ async function load() {
   }
 }
 
-async function more() {
-  if (loading.value || loadingMore.value || done.value) return;
-  const my = seq;
-  loadingMore.value = true;
-  moreError.value = "";
-  try {
-    const r = await listHistory(cfg(), view.value, q.value, PAGE, items.value.length);
-    if (my !== seq) return;
-    const known = new Set(items.value.map((h) => h.id));
-    items.value = [...items.value, ...r.filter((h) => !known.has(h.id))];
-    done.value = r.length < PAGE;
-  } catch (e) {
-    if (my !== seq) return;
-    if (e instanceof ApiError && e.status === 401) emit("unauthorized");
-    else moreError.value = errorMessage(e);
-  } finally {
-    loadingMore.value = false;
-  }
+/** 条件(表示・検索語・サイト)を変えたら 1 ページ目から */
+function reloadFromFirst() {
+  page.value = 1;
+  void load();
+}
+function goPage(p: number) {
+  page.value = p;
+  window.scrollTo(0, 0);
+  void load();
 }
 
 onMounted(load);
-watch(view, () => {
+watch([view, siteFilter], () => {
   items.value = [];
-  void load();
+  reloadFromFirst();
 });
 let timer: ReturnType<typeof setTimeout> | undefined;
 watch(q, () => {
   clearTimeout(timer);
-  timer = setTimeout(load, 300);
+  timer = setTimeout(reloadFromFirst, 300);
 });
 onUnmounted(() => clearTimeout(timer));
 
@@ -87,8 +94,9 @@ async function remove(h: HistoryItem) {
   try {
     if (novel) await deleteHistoryNovel(cfg(), h.site, h.novelKey);
     else await deleteHistory(cfg(), h.id);
-    // 読み込み済みのページを保ったまま、消した行だけ取り除く
+    // 消した行をすぐ外し、空いた分を次のページから詰めるために今のページを取り直す
     items.value = items.value.filter((x) => (novel ? !(x.site === h.site && x.novelKey === h.novelKey) : x.id !== h.id));
+    await load(true);
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) emit("unauthorized");
     else error.value = errorMessage(e);
@@ -98,6 +106,7 @@ async function remove(h: HistoryItem) {
 
 <template>
   <div>
+    <SiteFilter v-model="siteFilter" />
     <label class="searchbox">
       <Icon name="search" :size="18" />
       <input v-model="q" type="search" placeholder="作品名・話タイトルで検索" autocapitalize="off" />
@@ -108,10 +117,11 @@ async function remove(h: HistoryItem) {
         <button :class="{ active: view === 'novel' }" @click="view = 'novel'">作品毎</button>
       </div>
     </div>
+    <div v-if="!loading && total > 0" class="toolbar"><span class="muted">{{ total }} 件</span></div>
     <p v-if="error" class="error page">{{ error }}</p>
     <div v-if="!loading && items.length === 0 && !error" class="empty">
-      <div class="big">{{ q ? "一致する履歴がありません" : "閲覧履歴はまだありません" }}</div>
-      <template v-if="!q">サイトで作品や話を開くと記録されます。</template>
+      <div class="big">{{ q || siteFilter ? "一致する履歴がありません" : "閲覧履歴はまだありません" }}</div>
+      <template v-if="!q && !siteFilter">サイトで作品や話を開くと記録されます。</template>
     </div>
     <SwipeRow v-for="h in items" :key="h.id" @tap="emit('open', h.url)" @long="remove(h)">
       <div class="list-row">
@@ -124,6 +134,6 @@ async function remove(h: HistoryItem) {
         </div>
       </div>
     </SwipeRow>
-    <LoadMore v-if="!loading && items.length > 0" :loading="loadingMore" :done="done" :error="moreError" @more="more" />
+    <Pager v-if="items.length > 0" :page="page" :page-count="pageCount" :disabled="loading" @change="goPage" />
   </div>
 </template>

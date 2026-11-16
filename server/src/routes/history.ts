@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Db } from "../db/index.js";
 import { nowIso } from "../db/index.js";
 import { parseBody, sendError } from "../http/errors.js";
-import { isSiteId, resolveUrl, type SiteId } from "../sites.js";
+import { isSiteId, resolveUrl, SITE_IDS, type SiteId } from "../sites.js";
 import { requireAuth } from "../auth/session.js";
 import { escapeLike } from "./bookmarks.js";
 
@@ -20,6 +20,7 @@ const postSchema = z.object({
 const listSchema = z.object({
   view: z.enum(["episode", "novel"]).default("episode"),
   q: z.string().trim().max(200).optional(),
+  site: z.enum(SITE_IDS as [SiteId, ...SiteId[]]).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(100),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -101,26 +102,29 @@ export function historyRouter(db: Db): Router {
   router.get("/", (req, res) => {
     const parsed = listSchema.safeParse(req.query);
     if (!parsed.success) return void res.status(400).json({ error: "validation_error", details: parsed.error.issues });
-    const { view, q, limit, offset } = parsed.data;
+    const { view, q, site, limit, offset } = parsed.data;
     const userId = req.user!.id;
     const like = q ? `%${escapeLike(q)}%` : null;
+    // サイトの絞り込み(両方の表示で共通)
+    const siteWhere = site ? "AND site = ?" : "";
+    const siteParams = site ? [site] : [];
 
     if (view === "episode") {
       // エピソード毎は話の閲覧のみ。作品ページだけの閲覧は「作品毎」で表示する
       const where = like ? "AND (novel_title LIKE ? ESCAPE '!' OR episode_title LIKE ? ESCAPE '!')" : "";
-      const params = like ? [userId, like, like, limit, offset] : [userId, limit, offset];
+      const params = [userId, ...siteParams, ...(like ? [like, like] : [])];
+      const from = `FROM history WHERE user_id = ? AND episode_key <> '' ${siteWhere} ${where}`;
+      const total = (db.prepare(`SELECT COUNT(*) AS c ${from}`).get(...params) as unknown as { c: number }).c;
       const rows = db
-        .prepare(
-          `SELECT * FROM history WHERE user_id = ? AND episode_key <> '' ${where} ORDER BY viewed_at DESC, id DESC LIMIT ? OFFSET ?`,
-        )
-        .all(...params) as unknown as HistoryRow[];
-      return void res.json({ view, history: rows.map(toEpisodeDto) });
+        .prepare(`SELECT * ${from} ORDER BY viewed_at DESC, id DESC LIMIT ? OFFSET ?`)
+        .all(...params, limit, offset) as unknown as HistoryRow[];
+      return void res.json({ view, history: rows.map(toEpisodeDto), total });
     }
 
     // 作品毎: (site, novel_key) で集約。代表行は話の閲覧(episode_key <> '')を優先し、その中で最新。
     // 絞り込みは作品内のどれかの行が一致すれば作品ごと残す(話数・最終閲覧は絞り込み前の値)
     const match = like ? "(novel_title LIKE ? ESCAPE '!' OR episode_title LIKE ? ESCAPE '!')" : "1";
-    const sql = `
+    const cte = `
       WITH g AS (
         SELECT h.*,
           ROW_NUMBER() OVER (PARTITION BY site, novel_key ORDER BY (episode_key <> '') DESC, viewed_at DESC, id DESC) AS rn,
@@ -128,17 +132,22 @@ export function historyRouter(db: Db): Router {
           MAX(viewed_at) OVER (PARTITION BY site, novel_key) AS last_viewed_at,
           MAX(novel_title) OVER (PARTITION BY site, novel_key) AS any_title,
           MAX(${match}) OVER (PARTITION BY site, novel_key) AS matched
-        FROM history h WHERE user_id = ?
-      )
+        FROM history h WHERE user_id = ? ${siteWhere}
+      )`;
+    // プレースホルダの順序: match(2) → userId → site → (limit → offset)
+    const params = [...(like ? [like, like] : []), userId, ...siteParams];
+    const total = (db.prepare(`${cte} SELECT COUNT(*) AS c FROM g WHERE rn = 1 AND matched = 1`).get(...params) as unknown as { c: number }).c;
+    const rows = db
+      .prepare(
+        `${cte}
       SELECT id, site, novel_key, episode_key,
              CASE WHEN novel_title <> '' THEN novel_title ELSE any_title END AS novel_title,
              episode_title, url, episode_count, last_viewed_at, viewed_at
       FROM g WHERE rn = 1 AND matched = 1
-      ORDER BY last_viewed_at DESC, id DESC LIMIT ? OFFSET ?`;
-    // プレースホルダの順序: match(2) → userId → limit → offset
-    const params = like ? [like, like, userId, limit, offset] : [userId, limit, offset];
-    const rows = db.prepare(sql).all(...params) as unknown as NovelRow[];
-    res.json({ view, history: rows.map(toNovelDto) });
+      ORDER BY last_viewed_at DESC, id DESC LIMIT ? OFFSET ?`,
+      )
+      .all(...params, limit, offset) as unknown as NovelRow[];
+    res.json({ view, history: rows.map(toNovelDto), total });
   });
 
   // 作品単位の削除(?site=&novelKey=)または全消去(クエリ無し)

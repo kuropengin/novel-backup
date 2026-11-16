@@ -51,7 +51,7 @@ server/src/
 
 | メソッド/パス | 内容 |
 |---|---|
-| `GET /` | `{ bookmarks: [...], total }`。クエリ `q`(タイトル/作者/サイト id・日本語名の部分一致、大小無視)、`sort=added|updated|title|site`(既定 `added`。`updated` は元サイトの最新話更新日時、未取得は末尾)、`order=asc|desc`(既定 `desc`)、`limit` 1〜500(省略時は全件)・`offset` ≥ 0。`total` は絞り込み後の全件数。不正値は `400 validation_error` |
+| `GET /` | `{ bookmarks: [...], total }`。クエリ `q`(タイトル/作者/サイト id・日本語名の部分一致、大小無視)、`sort=added|updated|title|site`(既定 `added`。`updated` は元サイトの最新話更新日時、未取得は末尾)、`order=asc|desc`(既定 `desc`)、`site=narou|kakuyomu|hameln`、`limit` 1〜500(省略時は全件)・`offset` ≥ 0。`total` は絞り込み後の全件数。不正値は `400 validation_error` |
 | `GET /lookup?url=` | `{ bookmarked, bookmarkId }`。話ページ URL でも作品で判定。作品/話ページ以外は `{ false, null }`。`url` 無しは 400 |
 | `POST /` | `{ url, title, author? }` または `{ site, novelKey, title, author? }`。**`title` 必須**(アプリが表示中のページから取得して送る)。サーバーはサイトへアクセスしない。`url` は `resolveUrl` で作品に解決(話ページ URL も可)。作成 `201 { bookmark, created: true }`、登録済み `200 { bookmark, created: false }`(既存作品のタイトル/著者が空のときのみ補完)。作品/話ページでない URL は `400 not_a_novel_page` |
 | `PATCH /:id` | `{ note?, title?, lastReadEpisodeKey?, backupEnabled? }`(`title` は共有の作品タイトルを更新。`backupEnabled` は自分のお気に入りの自動バックアップの有効・無効) |
@@ -69,7 +69,7 @@ server/src/
 | メソッド/パス | 内容 |
 |---|---|
 | `POST /` | `{ url, novelTitle?, episodeTitle?, viewedAt? }`。`resolveUrl` で site/novelKey/episodeKey を確定し (ユーザー, site, novelKey, episodeKey) で upsert。**`200 { history }`**。再閲覧は `viewed_at`/`url` を更新(`viewedAt` が古くても巻き戻さない、未来は現在に丸める)、タイトルは空でない値のときだけ上書き。作品ページの `episodeTitle` は無視。作品/話ページ以外は `400 not_a_novel_page`。`viewedAt` はオフライン中に溜めた閲覧の送信用(ISO 8601) |
-| `GET /?view=episode|novel&q=&limit=&offset=` | `{ view, history: [...] }`。`view=episode`(既定): 行そのまま `viewed_at` の新しい順。`view=novel`: 作品毎(site+novelKey)に 1 件。代表は**最後に読んだ話**(話の閲覧が無ければ作品ページ行)で、`id/episodeKey/episodeTitle/url` はその行のもの、`novelTitle` は空でなければ代表行、無ければ作品内の非空タイトル。`episodeCount` = 閲覧した話数(作品ページ行は数えない)、`viewedAt` = 作品内の最終閲覧日時。新しい最終閲覧順。`q` は作品名/話タイトルの部分一致(作品毎は作品内のどれかの行が一致すれば作品を残す)。`limit` 1〜500(既定 100)、`offset` ≥ 0 |
+| `GET /?view=episode|novel&q=&site=&limit=&offset=` | `{ view, history: [...], total }`。`total` は絞り込み後の全件数(作品毎は作品数)。`site` でサイトを絞り込む。`view=episode`(既定): 行そのまま `viewed_at` の新しい順。`view=novel`: 作品毎(site+novelKey)に 1 件。代表は**最後に読んだ話**(話の閲覧が無ければ作品ページ行)で、`id/episodeKey/episodeTitle/url` はその行のもの、`novelTitle` は空でなければ代表行、無ければ作品内の非空タイトル。`episodeCount` = 閲覧した話数(作品ページ行は数えない)、`viewedAt` = 作品内の最終閲覧日時。新しい最終閲覧順。`q` は作品名/話タイトルの部分一致(作品毎は作品内のどれかの行が一致すれば作品を残す)。`limit` 1〜500(既定 100)、`offset` ≥ 0 |
 | `DELETE /:id` | 1 行削除。他人の行/無い行は 404 |
 | `DELETE /?site=&novelKey=` | 作品単位で削除(両方必須、片方だけは 400)。`{ ok, deleted }` |
 | `DELETE /` | 自分の履歴を全消去。`{ ok, deleted }` |

@@ -76,6 +76,24 @@ describe("history API", () => {
     expect(page.map((h: { novelTitle: string; episodeKey: string }) => `${h.novelTitle}/${h.episodeKey}`)).toEqual(["Alpha/2", "Alpha/1"]);
   });
 
+  it("filters by site and reports the filtered total in both views", async () => {
+    const { app } = setupApp();
+    const a = await makeAdmin(app);
+    await seed(a);
+    const ep = (await a.get("/api/history?site=narou")).body;
+    expect(ep.total).toBe(2);
+    expect(ep.history.map((h: { site: string }) => h.site)).toEqual(["narou", "narou"]);
+    expect((await a.get("/api/history?site=narou&limit=1")).body).toMatchObject({ total: 2 });
+    expect((await a.get("/api/history")).body.total).toBe(3);
+    const nv = (await a.get("/api/history?view=novel&site=kakuyomu")).body;
+    expect(nv.total).toBe(1);
+    expect(nv.history.map((h: { novelTitle: string }) => h.novelTitle)).toEqual(["Beta"]);
+    expect((await a.get("/api/history?view=novel&q=alpha&site=narou")).body.total).toBe(1);
+    expect((await a.get("/api/history?view=novel&q=alpha&site=hameln")).body.total).toBe(0);
+    expect((await a.get("/api/history?view=novel&limit=1")).body).toMatchObject({ total: 3 });
+    expect((await a.get("/api/history?site=bogus")).status).toBe(400);
+  });
+
   it("novel view: aggregates, prefers episode rows, counts episodes, filters", async () => {
     const { app } = setupApp();
     const a = await makeAdmin(app);

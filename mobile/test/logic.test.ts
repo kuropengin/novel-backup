@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ScrollHideController } from "../src/logic/scrollHide";
 import { enqueue, flushQueue, sanitizeQueue, type QueuedView } from "../src/logic/historyQueue";
-import { filterBookmarks, formatDate, formatDateTime, initialOf, offlineOnly, relativeTime, sortBookmarks, type BookmarkLike } from "../src/logic/lists";
+import { filterBookmarks, formatDate, formatDateTime, initialOf, offlineOnly, pageItems, relativeTime, sortBookmarks, type BookmarkLike } from "../src/logic/lists";
 import { addNotification, markAllRead, markRead, removeNotification, sanitizeNotifications, unreadCount, MAX_NOTIFICATIONS } from "../src/logic/notifications";
 import { classifyUrl, episodeUrl, isAllowedHost, isInAppUrl, externalOpenTarget, NAROU_SHORT_EPISODE_KEY, truncateUrl } from "../src/logic/sites";
 
@@ -100,6 +100,22 @@ describe("bookmark list helpers", () => {
     expect(items).toEqual(copy);
     expect(offlineOnly(items)).toEqual([]);
     expect(offlineOnly([{ ...items[0]!, offlineSaved: true }]).length).toBe(1);
+  });
+});
+
+describe("pageItems", () => {
+  it("7 ページ以下は全部並べる", () => {
+    expect(pageItems(1, 1)).toEqual([1]);
+    expect(pageItems(3, 7)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(pageItems(1, 0)).toEqual([]);
+  });
+  it("多いときは先頭・末尾・現在の前後だけを出し、枠の数は一定", () => {
+    expect(pageItems(1, 10)).toEqual([1, 2, 3, 4, 5, "gap", 10]);
+    expect(pageItems(4, 10)).toEqual([1, 2, 3, 4, 5, "gap", 10]);
+    expect(pageItems(5, 10)).toEqual([1, "gap", 4, 5, 6, "gap", 10]);
+    expect(pageItems(8, 10)).toEqual([1, "gap", 6, 7, 8, 9, 10]);
+    expect(pageItems(10, 10)).toEqual([1, "gap", 6, 7, 8, 9, 10]);
+    expect(pageItems(99, 10)).toEqual([1, "gap", 6, 7, 8, 9, 10]); // 範囲外は丸める
   });
 });
 

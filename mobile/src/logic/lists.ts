@@ -93,6 +93,20 @@ export function formatDateTime(iso: string | null | undefined): string {
   return `${t.getFullYear()}/${t.getMonth() + 1}/${t.getDate()} ${hm}`;
 }
 
+/**
+ * ページ送りに並べる番号(1 始まり)。先頭・末尾・現在の前後を出し、間は "gap"(…)にする。
+ * 例: pageItems(5, 10) → [1, "gap", 4, 5, 6, "gap", 10]
+ */
+export function pageItems(current: number, count: number): (number | "gap")[] {
+  if (count <= 7) return Array.from({ length: count }, (_, i) => i + 1);
+  const c = Math.min(Math.max(1, current), count);
+  const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+  // 端に寄ったときも番号の数(7 枠)が変わらないよう、先頭寄り・末尾寄り・中間で並べ方を変える
+  if (c <= 4) return [...range(1, 5), "gap", count];
+  if (c >= count - 3) return [1, "gap", ...range(count - 4, count)];
+  return [1, "gap", c - 1, c, c + 1, "gap", count];
+}
+
 /** ユーザー名の頭文字(アバター用)。空なら "?"。 */
 export function initialOf(name: string): string {
   const ch = Array.from(name.trim())[0];

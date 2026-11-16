@@ -20,7 +20,7 @@ const error = ref("");
 
 onMounted(async () => {
   try {
-    items.value = await listHistory({ serverUrl: props.settings.serverUrl, token: props.settings.token }, "novel", "", 30);
+    items.value = (await listHistory({ serverUrl: props.settings.serverUrl, token: props.settings.token }, { view: "novel", limit: 30 })).history;
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) emit("unauthorized");
     else error.value = errorMessage(e);

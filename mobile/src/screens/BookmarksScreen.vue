@@ -3,7 +3,8 @@ import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watc
 import Icon from "../components/Icon.vue";
 import BottomSheet from "../components/BottomSheet.vue";
 import BookmarkActionDialog from "../components/BookmarkActionDialog.vue";
-import LoadMore from "../components/LoadMore.vue";
+import Pager from "../components/Pager.vue";
+import SiteFilter from "../components/SiteFilter.vue";
 import SwipeRow from "../components/SwipeRow.vue";
 import type { ReaderTarget } from "../types";
 import {
@@ -29,10 +30,8 @@ import { getLocalProgress, hasPending, readVersion } from "../stores/readProgres
 import { filterBookmarks, formatDateTime, offlineOnly, sortBookmarks, SORT_OPTIONS, type SortKey, type SortOrder } from "../logic/lists";
 import { siteColor, siteLabel, type SiteId } from "../logic/sites";
 
-/** 1 回に読み込む件数(スクロールで続きを読む) */
+/** 1 ページの件数 */
 const PAGE = 30;
-/** 戻ってきたときに取り直す上限(サーバーの limit 上限) */
-const MAX_RELOAD = 500;
 
 const props = defineProps<{ settings: Settings }>();
 const emit = defineEmits<{ (e: "open", url: string): void; (e: "read", target: ReaderTarget): void; (e: "resume", target: ReaderTarget): void; (e: "unauthorized"): void }>();
@@ -41,18 +40,12 @@ const items = ref<Bookmark[]>([]);
 /** サーバー側の(絞り込み後の)全件数 */
 const total = ref(0);
 const loading = ref(true);
-const loadingMore = ref(false);
 const error = ref("");
-const moreError = ref("");
+/** 表示中のページ(1 始まり) */
+const page = ref(1);
 const q = ref("");
 /** サイトの絞り込み(null = すべて) */
 const siteFilter = ref<SiteId | null>(null);
-const SITE_FILTERS: { id: SiteId | null; label: string }[] = [
-  { id: null, label: "ALL" },
-  { id: "narou", label: "なろう" },
-  { id: "kakuyomu", label: "カクヨム" },
-  { id: "hameln", label: "ハーメルン" },
-];
 const sortKey = ref<SortKey>("updated");
 const order = ref<SortOrder>("desc");
 const sheet = ref(false);
@@ -129,21 +122,31 @@ const visible = computed(() => {
   return sortBookmarks(filterBookmarks(bySite, q.value), sortKey.value, order.value);
 });
 const countLabel = computed(() => (online.value ? total.value : visible.value.length));
-const done = computed(() => items.value.length >= total.value);
+const pageCount = computed(() => Math.max(1, Math.ceil(total.value / PAGE)));
 const sortLabel = computed(() => `${SORT_OPTIONS.find((o) => o.key === sortKey.value)?.label ?? ""}${order.value === "desc" ? " ↓" : " ↑"}`);
 
-// 検索語・並び順が変わったら古い応答を捨てる
+// 検索語・並び順・ページが変わったら古い応答を捨てる
 let seq = 0;
-/** 先頭から取り直す。silent は戻ってきたときの更新用(表示を消さず、読み込み済みの件数分を取り直す) */
+/** 表示中のページを取得する。silent は戻ってきたとき・操作後の更新用(表示を消さない) */
 async function load(silent = false) {
   const my = ++seq;
   if (!silent) loading.value = true;
   error.value = "";
-  moreError.value = "";
   try {
-    const limit = silent ? Math.min(MAX_RELOAD, Math.max(PAGE, items.value.length)) : PAGE;
-    const r = await listBookmarks(cfg(), { q: q.value, site: siteFilter.value ?? undefined, sort: sortKey.value, order: order.value, limit, offset: 0 });
+    const r = await listBookmarks(cfg(), {
+      q: q.value,
+      site: siteFilter.value ?? undefined,
+      sort: sortKey.value,
+      order: order.value,
+      limit: PAGE,
+      offset: (page.value - 1) * PAGE,
+    });
     if (my !== seq) return;
+    // 削除などで今のページが無くなったら最後のページを出す
+    if (r.bookmarks.length === 0 && r.total > 0 && page.value > 1) {
+      page.value = Math.ceil(r.total / PAGE);
+      return void load(silent);
+    }
     items.value = r.bookmarks;
     total.value = r.total;
   } catch (e) {
@@ -153,29 +156,15 @@ async function load(silent = false) {
   }
 }
 
-async function more() {
-  if (!online.value || loading.value || loadingMore.value || done.value) return;
-  const my = seq;
-  loadingMore.value = true;
-  moreError.value = "";
-  try {
-    const r = await listBookmarks(cfg(), {
-      q: q.value,
-      site: siteFilter.value ?? undefined,
-      sort: sortKey.value,
-      order: order.value,
-      limit: PAGE,
-      offset: items.value.length,
-    });
-    if (my !== seq) return;
-    const known = new Set(items.value.map((b) => b.id));
-    items.value = [...items.value, ...r.bookmarks.filter((b) => !known.has(b.id))];
-    total.value = r.total;
-  } catch (e) {
-    if (my === seq) handleError(e, moreError);
-  } finally {
-    loadingMore.value = false;
-  }
+/** 条件(検索語・サイト・並び順)を変えたら 1 ページ目から */
+function reloadFromFirst() {
+  page.value = 1;
+  void load();
+}
+function goPage(p: number) {
+  page.value = p;
+  window.scrollTo(0, 0);
+  void load();
 }
 
 onMounted(() => void load());
@@ -186,10 +175,10 @@ let qTimer: ReturnType<typeof setTimeout> | undefined;
 watch(q, () => {
   if (!online.value) return; // オフライン時は端末内で絞り込む
   clearTimeout(qTimer);
-  qTimer = setTimeout(() => void load(), 300);
+  qTimer = setTimeout(reloadFromFirst, 300);
 });
 watch([sortKey, order, siteFilter], () => {
-  if (online.value) void load();
+  if (online.value) reloadFromFirst();
 });
 // オフライン中に変えた検索語・並び順を、復帰したらサーバー側の結果に反映する
 watch(online, (on) => {
@@ -216,17 +205,17 @@ onUnmounted(() => {
 function patchItems(ids: ReadonlySet<number>, patch: Partial<Bookmark>) {
   items.value = items.value.map((b) => (ids.has(b.id) ? { ...b, ...patch } : b));
 }
-function removeItems(ids: ReadonlySet<number>) {
-  const before = items.value.length;
+/** 削除後: 消した行をすぐ外し、空いた分を次のページから詰めるために今のページを取り直す */
+async function afterRemove(ids: ReadonlySet<number>) {
   items.value = items.value.filter((b) => !ids.has(b.id));
-  total.value = Math.max(0, total.value - (before - items.value.length));
+  await load(true);
 }
 
 async function remove(b: Bookmark) {
   if (!(await confirmNative(`「${b.title || b.novelKey}」をお気に入りから削除しますか?`, "削除", "削除"))) return;
   try {
     await deleteBookmark(cfg(), b.id);
-    removeItems(new Set([b.id]));
+    await afterRemove(new Set([b.id]));
   } catch (e) {
     handleError(e);
   }
@@ -355,7 +344,7 @@ async function bulkRemove() {
   if (n === 0 || !(await confirmNative(`選択した ${n} 件をお気に入りから削除しますか?`, "削除", "削除"))) return;
   void runBulk(async (ids) => {
     await bulkBookmarks(cfg(), { action: "delete", ids });
-    removeItems(new Set(ids));
+    await afterRemove(new Set(ids));
   });
 }
 
@@ -423,23 +412,11 @@ function pick(key: SortKey) {
 
 <template>
   <div>
+    <SiteFilter v-model="siteFilter" />
     <label class="searchbox">
       <Icon name="search" :size="18" />
       <input v-model="q" type="search" placeholder="タイトル・作者・サイトで検索" autocapitalize="off" />
     </label>
-    <div class="site-filter" role="group" aria-label="サイトで絞り込み">
-      <button
-        v-for="f in SITE_FILTERS"
-        :key="f.label"
-        class="chip"
-        :class="{ active: siteFilter === f.id }"
-        :style="f.id ? { '--c': siteColor(f.id) } : undefined"
-        :aria-pressed="siteFilter === f.id"
-        @click="siteFilter = f.id"
-      >
-        {{ f.label }}
-      </button>
-    </div>
     <div v-if="selecting" class="toolbar">
       <span class="picked">{{ pickedCount }} 件選択</span>
       <div class="row">
@@ -488,7 +465,7 @@ function pick(key: SortKey) {
         </div>
       </div>
     </SwipeRow>
-    <LoadMore v-if="online && !loading && items.length > 0" :loading="loadingMore" :done="done" :error="moreError" @more="more" />
+    <Pager v-if="online && items.length > 0" :page="page" :page-count="pageCount" :disabled="loading" @change="goPage" />
 
     <!-- 複数選択中の操作(下のタブバーの上に重ねる) -->
     <div v-if="selecting" class="select-bar">
@@ -533,10 +510,6 @@ function pick(key: SortKey) {
 .status .st.active { color: var(--accent); opacity: 1; }
 
 .toolbar .row { display: flex; gap: 6px; }
-.site-filter { display: flex; gap: 8px; padding: 0 16px 8px; overflow-x: auto; scrollbar-width: none; }
-.site-filter::-webkit-scrollbar { display: none; }
-.chip { --c: var(--fg); flex: none; padding: 5px 14px; border: 1px solid var(--border); border-radius: 999px; background: none; color: var(--fg); font-size: 13px; font-weight: 700; }
-.chip.active { background: var(--c); border-color: var(--c); color: var(--bg); }
 .picked { font-weight: 800; }
 .list-row { cursor: pointer; touch-action: manipulation; }
 .list-row.picked { background: var(--surface); }

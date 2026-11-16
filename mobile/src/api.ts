@@ -267,10 +267,16 @@ export async function postHistory(cfg: ApiConfig, input: HistoryInput): Promise<
   return (await call<{ history: HistoryItem }>(cfg, "POST", "/api/history", input)).data.history;
 }
 
-export async function listHistory(cfg: ApiConfig, view: "episode" | "novel", q = "", limit = 200, offset = 0): Promise<HistoryItem[]> {
-  const qs = new URLSearchParams({ view, limit: String(limit), offset: String(offset) });
-  if (q.trim()) qs.set("q", q.trim());
-  return (await call<{ history: HistoryItem[] }>(cfg, "GET", `/api/history?${qs}`)).data.history;
+/** 閲覧履歴のページ取得。total は絞り込み後の全件数 */
+export async function listHistory(
+  cfg: ApiConfig,
+  query: { view: "episode" | "novel"; q?: string; site?: "narou" | "kakuyomu" | "hameln"; limit: number; offset?: number },
+): Promise<{ history: HistoryItem[]; total: number }> {
+  const qs = new URLSearchParams({ view: query.view, limit: String(query.limit), offset: String(query.offset ?? 0) });
+  if (query.q?.trim()) qs.set("q", query.q.trim());
+  if (query.site) qs.set("site", query.site);
+  const d = (await call<{ history: HistoryItem[]; total?: number }>(cfg, "GET", `/api/history?${qs}`)).data;
+  return { history: d.history, total: d.total ?? d.history.length };
 }
 
 export async function deleteHistory(cfg: ApiConfig, id: number): Promise<void> {
