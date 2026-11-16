@@ -27,7 +27,7 @@ import { getOfflineNovel, listOfflineNovelKeys, saveOfflineNovel } from "../stor
 import { pushOverlay } from "../stores/overlays";
 import { getLocalProgress, hasPending, readVersion } from "../stores/readProgress";
 import { filterBookmarks, formatDateTime, offlineOnly, sortBookmarks, SORT_OPTIONS, type SortKey, type SortOrder } from "../logic/lists";
-import { siteColor, siteLabel } from "../logic/sites";
+import { siteColor, siteLabel, type SiteId } from "../logic/sites";
 
 /** 1 回に読み込む件数(スクロールで続きを読む) */
 const PAGE = 30;
@@ -45,6 +45,14 @@ const loadingMore = ref(false);
 const error = ref("");
 const moreError = ref("");
 const q = ref("");
+/** サイトの絞り込み(null = すべて) */
+const siteFilter = ref<SiteId | null>(null);
+const SITE_FILTERS: { id: SiteId | null; label: string }[] = [
+  { id: null, label: "ALL" },
+  { id: "narou", label: "なろう" },
+  { id: "kakuyomu", label: "カクヨム" },
+  { id: "hameln", label: "ハーメルン" },
+];
 const sortKey = ref<SortKey>("updated");
 const order = ref<SortOrder>("desc");
 const sheet = ref(false);
@@ -117,7 +125,8 @@ const visible = computed(() => {
     offlineSaved: offlineKeys.value.has(`${b.site}:${b.novelKey}`),
   }));
   if (online.value) return enriched;
-  return sortBookmarks(filterBookmarks(offlineOnly(enriched), q.value), sortKey.value, order.value);
+  const bySite = siteFilter.value ? offlineOnly(enriched).filter((b) => b.site === siteFilter.value) : offlineOnly(enriched);
+  return sortBookmarks(filterBookmarks(bySite, q.value), sortKey.value, order.value);
 });
 const countLabel = computed(() => (online.value ? total.value : visible.value.length));
 const done = computed(() => items.value.length >= total.value);
@@ -133,7 +142,7 @@ async function load(silent = false) {
   moreError.value = "";
   try {
     const limit = silent ? Math.min(MAX_RELOAD, Math.max(PAGE, items.value.length)) : PAGE;
-    const r = await listBookmarks(cfg(), { q: q.value, sort: sortKey.value, order: order.value, limit, offset: 0 });
+    const r = await listBookmarks(cfg(), { q: q.value, site: siteFilter.value ?? undefined, sort: sortKey.value, order: order.value, limit, offset: 0 });
     if (my !== seq) return;
     items.value = r.bookmarks;
     total.value = r.total;
@@ -150,7 +159,14 @@ async function more() {
   loadingMore.value = true;
   moreError.value = "";
   try {
-    const r = await listBookmarks(cfg(), { q: q.value, sort: sortKey.value, order: order.value, limit: PAGE, offset: items.value.length });
+    const r = await listBookmarks(cfg(), {
+      q: q.value,
+      site: siteFilter.value ?? undefined,
+      sort: sortKey.value,
+      order: order.value,
+      limit: PAGE,
+      offset: items.value.length,
+    });
     if (my !== seq) return;
     const known = new Set(items.value.map((b) => b.id));
     items.value = [...items.value, ...r.bookmarks.filter((b) => !known.has(b.id))];
@@ -172,7 +188,7 @@ watch(q, () => {
   clearTimeout(qTimer);
   qTimer = setTimeout(() => void load(), 300);
 });
-watch([sortKey, order], () => {
+watch([sortKey, order, siteFilter], () => {
   if (online.value) void load();
 });
 // オフライン中に変えた検索語・並び順を、復帰したらサーバー側の結果に反映する
@@ -411,6 +427,19 @@ function pick(key: SortKey) {
       <Icon name="search" :size="18" />
       <input v-model="q" type="search" placeholder="タイトル・作者・サイトで検索" autocapitalize="off" />
     </label>
+    <div class="site-filter" role="group" aria-label="サイトで絞り込み">
+      <button
+        v-for="f in SITE_FILTERS"
+        :key="f.label"
+        class="chip"
+        :class="{ active: siteFilter === f.id }"
+        :style="f.id ? { '--c': siteColor(f.id) } : undefined"
+        :aria-pressed="siteFilter === f.id"
+        @click="siteFilter = f.id"
+      >
+        {{ f.label }}
+      </button>
+    </div>
     <div v-if="selecting" class="toolbar">
       <span class="picked">{{ pickedCount }} 件選択</span>
       <div class="row">
@@ -504,6 +533,10 @@ function pick(key: SortKey) {
 .status .st.active { color: var(--accent); opacity: 1; }
 
 .toolbar .row { display: flex; gap: 6px; }
+.site-filter { display: flex; gap: 8px; padding: 0 16px 8px; overflow-x: auto; scrollbar-width: none; }
+.site-filter::-webkit-scrollbar { display: none; }
+.chip { --c: var(--fg); flex: none; padding: 5px 14px; border: 1px solid var(--border); border-radius: 999px; background: none; color: var(--fg); font-size: 13px; font-weight: 700; }
+.chip.active { background: var(--c); border-color: var(--c); color: var(--bg); }
 .picked { font-weight: 800; }
 .list-row { cursor: pointer; touch-action: manipulation; }
 .list-row.picked { background: var(--surface); }

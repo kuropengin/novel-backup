@@ -43,6 +43,8 @@ export type BookmarkSort = "added" | "updated" | "title" | "site";
 
 export interface BookmarkPageQuery {
   q?: string;
+  /** サイトで絞り込む(省略時はすべて) */
+  site?: "narou" | "kakuyomu" | "hameln";
   sort?: BookmarkSort;
   order?: "asc" | "desc";
   limit: number;
@@ -237,6 +239,7 @@ export async function logout(cfg: ApiConfig): Promise<void> {
 export async function listBookmarks(cfg: ApiConfig, query: BookmarkPageQuery): Promise<{ bookmarks: Bookmark[]; total: number }> {
   const qs = new URLSearchParams({ limit: String(query.limit), offset: String(query.offset) });
   if (query.q?.trim()) qs.set("q", query.q.trim());
+  if (query.site) qs.set("site", query.site);
   if (query.sort) qs.set("sort", query.sort);
   if (query.order) qs.set("order", query.order);
   const d = (await call<{ bookmarks: Bookmark[]; total?: number }>(cfg, "GET", `/api/bookmarks?${qs}`)).data;

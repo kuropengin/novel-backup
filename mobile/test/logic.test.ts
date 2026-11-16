@@ -3,7 +3,7 @@ import { ScrollHideController } from "../src/logic/scrollHide";
 import { enqueue, flushQueue, sanitizeQueue, type QueuedView } from "../src/logic/historyQueue";
 import { filterBookmarks, formatDate, formatDateTime, initialOf, offlineOnly, relativeTime, sortBookmarks, type BookmarkLike } from "../src/logic/lists";
 import { addNotification, markAllRead, markRead, removeNotification, sanitizeNotifications, unreadCount, MAX_NOTIFICATIONS } from "../src/logic/notifications";
-import { classifyUrl, isAllowedHost, isInAppUrl, externalOpenTarget, truncateUrl } from "../src/logic/sites";
+import { classifyUrl, episodeUrl, isAllowedHost, isInAppUrl, externalOpenTarget, NAROU_SHORT_EPISODE_KEY, truncateUrl } from "../src/logic/sites";
 
 describe("ScrollHideController", () => {
   it("しきい値(8px)未満では隠さない / 超えたら隠す", () => {
@@ -155,6 +155,17 @@ describe("classifyUrl", () => {
     expect(classifyUrl("https://yomou.syosetu.com/")).toBeNull();
     expect(classifyUrl("https://kakuyomu.jp/")).toBeNull();
     expect(classifyUrl("nope")).toBeNull();
+  });
+
+  it("episodeUrl はバックアップの話を元サイトの話ページ(なろう短編は作品ページ)にする", () => {
+    expect(episodeUrl("narou", "n1234ab", "12")).toBe("https://ncode.syosetu.com/n1234ab/12/");
+    expect(episodeUrl("narou", "n1234ab", NAROU_SHORT_EPISODE_KEY)).toBe("https://ncode.syosetu.com/n1234ab/");
+    expect(episodeUrl("hameln", "298", "1")).toBe("https://syosetu.org/novel/298/1.html");
+    expect(episodeUrl("kakuyomu", "123", "456")).toBe("https://kakuyomu.jp/works/123/episodes/456");
+    // サイト表示で記録する履歴と同じ種別になる
+    expect(classifyUrl(episodeUrl("narou", "n1234ab", "12"))).toEqual({ site: "narou", kind: "episode" });
+    expect(classifyUrl(episodeUrl("hameln", "298", "1"))).toEqual({ site: "hameln", kind: "episode" });
+    expect(classifyUrl(episodeUrl("kakuyomu", "123", "456"))).toEqual({ site: "kakuyomu", kind: "episode" });
   });
 });
 

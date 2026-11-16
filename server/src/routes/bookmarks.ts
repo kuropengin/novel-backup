@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Db } from "../db/index.js";
 import { nowIso, transaction } from "../db/index.js";
 import { ah, parseBody, sendError } from "../http/errors.js";
-import { isSiteId, novelUrl, resolveUrl, type SiteId } from "../sites.js";
+import { isSiteId, novelUrl, resolveUrl, SITE_IDS, type SiteId } from "../sites.js";
 import { requireAuth } from "../auth/session.js";
 
 const KEY = /^[A-Za-z0-9_-]{1,64}$/;
@@ -29,6 +29,7 @@ const patchSchema = z
 
 const listQuerySchema = z.object({
   q: z.string().trim().max(200).optional(),
+  site: z.enum(SITE_IDS as [SiteId, ...SiteId[]]).optional(),
   sort: z.enum(["added", "updated", "title", "site"]).default("added"),
   order: z.enum(["asc", "desc"]).default("desc"),
   // limit 省略時は全件(旧アプリ互換)
@@ -175,12 +176,12 @@ export function bookmarksRouter(db: Db): Router {
     if (isBlankAuthor(b.author) && author) db.prepare("UPDATE novels SET author = ? WHERE id = ?").run(author, b.novel_id);
   }
 
-  // q: タイトル/作者/サイト(id・日本語名)の部分一致。sort: added|updated|title|site(updated は元サイトでの最新話更新日時 source_updated_at。未取得は常に末尾)
+  // q: タイトル/作者/サイト(id・日本語名)の部分一致。site: サイトで絞り込み。sort: added|updated|title|site(updated は元サイトでの最新話更新日時 source_updated_at。未取得は常に末尾)
   // limit/offset でページ単位に取得できる。total は絞り込み後の全件数
   router.get("/", (req, res) => {
     const parsed = listQuerySchema.safeParse(req.query);
     if (!parsed.success) return void res.status(400).json({ error: "validation_error", details: parsed.error.issues });
-    const { q, sort, order, limit, offset } = parsed.data;
+    const { q, site, sort, order, limit, offset } = parsed.data;
     const dir = order === "asc" ? "ASC" : "DESC";
     const orderBy =
       sort === "title"
@@ -192,6 +193,10 @@ export function bookmarksRouter(db: Db): Router {
             : `created_at ${dir}, id ${dir}`;
     const params: (string | number)[] = [req.user!.id];
     let where = "WHERE b.user_id = ?";
+    if (site) {
+      where += " AND n.site = ?";
+      params.push(site);
+    }
     if (q) {
       const like = `%${escapeLike(q)}%`;
       where += ` AND (n.title LIKE ? ESCAPE '!' OR n.author LIKE ? ESCAPE '!' OR n.site LIKE ? ESCAPE '!' OR ${SITE_LABEL_SQL} LIKE ? ESCAPE '!')`;

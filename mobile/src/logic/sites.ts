@@ -11,6 +11,26 @@ export function siteColor(site: string): string {
   return SITE_COLORS[site as SiteId] ?? "#8b98a5";
 }
 
+/**
+ * なろうの短編の話キー。短編は話ページが無く作品ページ自体が本文
+ * (server/python/scrape_with_scrapling.py の NAROU_SHORT_EPISODE_KEY と一致させること)
+ */
+export const NAROU_SHORT_EPISODE_KEY = "short";
+
+/** バックアップの話に対応する元サイトの URL(閲覧履歴用)。なろうの短編は作品ページ */
+export function episodeUrl(site: SiteId, novelKey: string, episodeKey: string): string {
+  switch (site) {
+    case "narou":
+      return episodeKey === NAROU_SHORT_EPISODE_KEY
+        ? `https://ncode.syosetu.com/${novelKey}/`
+        : `https://ncode.syosetu.com/${novelKey}/${episodeKey}/`;
+    case "hameln":
+      return `https://syosetu.org/novel/${novelKey}/${episodeKey}.html`;
+    case "kakuyomu":
+      return `https://kakuyomu.jp/works/${novelKey}/episodes/${episodeKey}`;
+  }
+}
+
 export interface PageKind {
   site: SiteId;
   kind: "novel" | "episode";

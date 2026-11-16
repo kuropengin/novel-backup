@@ -6,6 +6,8 @@ import { ApiError, NetworkError, errorMessage, listBackupEpisodes, type BackupEp
 import type { SiteId } from "../logic/sites";
 import { getOfflineNovel } from "../stores/offlineLibrary";
 import { loadProgress, setRead } from "../stores/readProgress";
+import { recordView } from "../stores/historySync";
+import { episodeUrl } from "../logic/sites";
 import { resumeIndex } from "../logic/readProgress";
 import { FONT_SIZES_PX, fontStackOf, type DisplaySettings } from "../display";
 import { pushOverlay } from "../stores/overlays";
@@ -96,7 +98,10 @@ async function applyInitial() {
   }
   currentIndex.value = i >= 0 ? i : 0;
   // 戻る操作で復元できるよう、開いた話を履歴へ反映する
-  if (current.value) emit("episode", current.value.episodeKey);
+  if (current.value) {
+    emit("episode", current.value.episodeKey);
+    recordHistory(current.value);
+  }
   endMarked = false;
   void nextTick(checkEnd);
 }
@@ -138,6 +143,17 @@ async function load() {
   }
 }
 
+/** 閲覧履歴に記録する(サイトで開いたときと同じく元サイトの URL で。オフライン時は端末に溜めて後で送る) */
+function recordHistory(ep: ReaderEpisode) {
+  void recordView(cfg(), {
+    url: episodeUrl(props.site, props.novelKey, ep.episodeKey),
+    novelTitle: props.novelTitle,
+    episodeTitle: ep.title,
+  }).then((ok) => {
+    if (!ok) emit("unauthorized");
+  });
+}
+
 // 戻るボタンで閉じられるよう、メニューと一覧はオーバーレイとして登録する
 let releaseMenu: (() => void) | null = null;
 function openMenu() {
@@ -177,6 +193,7 @@ function show(i: number) {
   currentIndex.value = i;
   endMarked = false;
   emit("episode", episodes.value[i].episodeKey);
+  recordHistory(episodes.value[i]);
   void nextTick(() => {
     window.scrollTo(0, 0);
     void nextTick(checkEnd); // 短くてスクロールできない話はそのまま末尾扱い

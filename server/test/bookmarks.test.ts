@@ -195,6 +195,16 @@ describe("bookmarks list query and lookup", () => {
     expect((await a.get("/api/bookmarks?order=up")).status).toBe(400);
   });
 
+  it("filters by site, combined with q and paging", async () => {
+    const { a } = await seed();
+    const r = await a.get("/api/bookmarks?site=narou");
+    expect(titles(r)).toEqual(["banana"]);
+    expect(r.body.total).toBe(1);
+    expect(titles(await a.get("/api/bookmarks?site=kakuyomu&q=app"))).toEqual(["Apple"]);
+    expect(titles(await a.get("/api/bookmarks?site=hameln&q=app"))).toEqual([]);
+    expect((await a.get("/api/bookmarks?site=other")).status).toBe(400);
+  });
+
   it("pages with limit/offset after sorting and filtering, and reports the filtered total", async () => {
     const { a } = await seed();
     const p1 = await a.get("/api/bookmarks?sort=title&order=asc&limit=2");

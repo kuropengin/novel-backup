@@ -13,6 +13,10 @@ from scrapling import Fetcher
 # 目次のページ送りの間隔(秒)。サーバー側のレート制限と同程度に保つ
 TOC_PAGE_INTERVAL_SEC = 2.0
 
+# なろうの短編は目次も話ページも無く、作品ページ自体が本文。その 1 話をこの話キーで扱う
+# (mobile/src/logic/sites.ts の NAROU_SHORT_EPISODE_KEY と一致させること)
+NAROU_SHORT_EPISODE_KEY = "short"
+
 
 @dataclass
 class Episode:
@@ -214,9 +218,12 @@ def scrape_narou_episodes(novel_key: str):
     # 目次は 1 ページ 100 話。「次へ」が無くなるまで辿る(途中のページで失敗したら全体を失敗させる)
     url: str | None = f"https://ncode.syosetu.com/{novel_key}/"
     visited: set[str] = set()
+    first_tree = None
     while url and url not in visited:
         visited.add(url)
         tree, _ = get_tree(url)
+        if first_tree is None:
+            first_tree = tree
         for link in tree.xpath("//a[contains(@class,'subtitle')]"):
             href = first_attr(link, ["./@href"])
             title = first_text(link, ["."])
@@ -254,11 +261,31 @@ def scrape_narou_episodes(novel_key: str):
         url = urljoin(url, next_href) if next_href else None
         if url:
             time.sleep(TOC_PAGE_INTERVAL_SEC)
+    # 短編: 目次が無く、作品ページに本文がある
+    if not episodes and first_tree is not None and first_tree.xpath("//div[contains(@class,'js-novel-text')]"):
+        title = first_text(first_tree, ["//h1[contains(@class,'p-novel__title')]", "//p[contains(@class,'novel_title')]"])
+        # 「掲載日：2023/10/06」(日付のみ。改稿日時は作品ページに無い)
+        published = first_text(first_tree, ["//div[contains(@class,'p-novel__date-published')]"])
+        published = re.sub(r"^\s*掲載日\s*[:：]\s*", "", published)
+        episodes.append(
+            Episode(
+                episode_key=NAROU_SHORT_EPISODE_KEY,
+                position=1,
+                title=title or novel_key,
+                chapter=None,
+                published_at=published,
+                updated_at=published,
+            )
+        )
     return [e.__dict__ for e in episodes]
 
 
 def scrape_narou_content(novel_key: str, episode_key: str):
-    tree, _ = get_tree(f"https://ncode.syosetu.com/{novel_key}/{episode_key}/")
+    # 短編は作品ページ自体が本文(話ページの URL は存在しない)
+    if episode_key == NAROU_SHORT_EPISODE_KEY:
+        tree, _ = get_tree(f"https://ncode.syosetu.com/{novel_key}/")
+    else:
+        tree, _ = get_tree(f"https://ncode.syosetu.com/{novel_key}/{episode_key}/")
     title = first_text(tree, [
         "//h1[contains(@class,'p-novel__title')]",  # 新マークアップ(2024+)
         "//p[contains(@class,'novel_subtitle')]",  # 旧マークアップ
@@ -361,6 +388,15 @@ def scrape_hameln_episodes(novel_key: str):
     # 旧マークアップ: a[href$=.html] を並べただけ(日時なし)
     for link in tree.xpath("//a[contains(@href,'.html')]"):
         add(first_attr(link, ["./@href"]), first_text(link, ["."]), "", "")
+    if episodes:
+        return [e.__dict__ for e in episodes]
+
+    # 1 話だけの短編: 目次が無く、作品ページに本文がある(本文は 1.html でも読める)
+    if tree.xpath("//div[@id='honbun']"):
+        # <title> は「作品名 - 話タイトル - ハーメルン」
+        parts = first_text(tree, ["//title"]).split(" - ")
+        title = parts[1] if len(parts) >= 3 else parts[0]
+        add("1.html", title.strip() or novel_key, "", "")
     return [e.__dict__ for e in episodes]
 
 
